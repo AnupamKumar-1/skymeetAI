@@ -1,35 +1,28 @@
-# --- Core ML & TensorFlow ---
-# Install TensorFlow separately (Apple Silicon optimized)
-# pip install tensorflow-macos==2.16.2 tensorflow-metal
+
 numpy>=1.26.0,<2.0.0
 pandas>=2.3.0
 scikit-learn>=1.4.0
 scipy>=1.11.0
 
-# --- Audio processing ---
 librosa==0.11.0
 audioread==3.0.1
 soundfile>=0.12.1
 soxr>=0.5.0.post1
 
-# --- Image processing ---
 Pillow>=10.0.0
 mtcnn==1.0.0
-opencv-python-headless<4.10.0  # ensures NumPy < 2 compatibility
+opencv-python-headless<4.10.0
 
-# --- Flask API ---
 Flask>=3.0.0
 click>=8.0.0
 blinker>=1.6.0
 itsdangerous>=2.1.0
 Jinja2>=3.1.0
 
-# --- Visualization & Utils ---
 matplotlib>=3.8.0
 tqdm>=4.65.0
 joblib>=1.3.0
 
-# --- Miscellaneous ---
 platformdirs>=4.0.0
 pooch>=1.8.0
 lz4>=4.0.0

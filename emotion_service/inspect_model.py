@@ -1,10 +1,4 @@
-# inspect_model_loader.py
-"""
-Load a checkpoint using your predict.py loader and introspect its forward behavior.
-Run from the same directory where you ran predict.py (your current working dir).
-Example:
-  python inspect_model_loader.py --model saved_models/multimodal_best.pth --device cpu
-"""
+
 import argparse
 import torch
 import traceback

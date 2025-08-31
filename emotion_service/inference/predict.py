@@ -1,17 +1,4 @@
-#!/usr/bin/env python3
-"""
-predict.py
 
-Location: emotion_service/inference/predict.py
-
-Supports inference from either:
-  - an image + audio pair (as before), or
-  - a single video file (extracts a representative frame and the audio track)
-
-New additions:
- - load_models(...) to preload model(s) into memory
- - predict_with_loaded_models(...) to run inference repeatedly without reloading
-"""
 import os
 import argparse
 import json
@@ -38,22 +25,14 @@ except Exception:
     cv2 = None
 
 BASE_DIR = os.path.dirname(__file__)
-# -------------------------
-# Paths
-# -------------------------
+
 DEFAULT_MM_PATH = os.path.join(BASE_DIR, "saved_models", "multimodal_best.pth")
 DEFAULT_IF_PATH = os.path.join(BASE_DIR, "results", "anomaly", "isolation_forest.joblib")
 
-# -------------------------
-# Logging
-# -------------------------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("predict")
 
 
-# -------------------------
-# Preprocessing (match training!)
-# -------------------------
 IMG_SIZE = (224, 224)
 AUDIO_SR = 16000
 N_MELS = 128
@@ -70,10 +49,7 @@ _resnet_weights_enum = getattr(models, "ResNet18_Weights", None)
 
 
 def _build_image_backbone(device: torch.device):
-    """
-    Returns a model (conv+avgpool) that produces (B,512,1,1) outputs for 224x224 inputs.
-    We strip the final fc layer of ResNet18.
-    """
+
     global _IMAGE_BACKBONE
     if _IMAGE_BACKBONE is not None:
         return _IMAGE_BACKBONE
@@ -128,10 +104,6 @@ def preprocess_audio(audio_path: str, sr: int = AUDIO_SR) -> torch.Tensor:
     t = torch.tensor(vec).unsqueeze(0).float()  # (1, 128)
     return t
 
-
-# -------------------------
-# Video utilities
-# -------------------------
 
 def _ensure_ffmpeg_available():
     """Return path to ffmpeg or raise a helpful error."""
@@ -315,11 +287,6 @@ def extract_frame_and_audio(video_path: str, target_frame_time: float = None):
     return frame_img_path, audio_wav_path
 
 
-
-# -------------------------
-# USER ACTION REQUIRED: Build your model architecture here if you only have a checkpoint (state_dict).
-# -------------------------
-
 def build_model(checkpoint_meta: dict = None, inferred: dict = None):
     """
     Construct MultimodalNet by trying (in order):
@@ -425,11 +392,6 @@ def build_model(checkpoint_meta: dict = None, inferred: dict = None):
     model = mm_cls(**kwargs)
     return model
 
-
-
-# -------------------------
-# Loading utilities
-# -------------------------
 
 def load_multimodal_model(path: str, device: torch.device):
     if not os.path.exists(path):
@@ -537,12 +499,6 @@ Workarounds:
 Underlying loading error: {e}
 """
         )
-
-
-# -------------------------
-# Helper: extract embeddings + logits
-# -------------------------
-
 
 def _try_call(fn, *args, **kwargs):
     try:
@@ -712,11 +668,6 @@ def get_embeddings_and_logits(model, img_tensor: torch.Tensor, audio_tensor: tor
         "Check that your build_model() matches the training architecture and that preprocess_image/audio produce the expected raw features.\n"
     )
 
-
-# -------------------------
-# New: load models + predict with loaded models
-# -------------------------
-
 def load_models(multimodal_source: Any, if_source: Any, device: Optional[torch.device] = None) -> Tuple[Any, dict, Any]:
     """
     Load and return (model, meta, isolation_forest_model).
@@ -796,11 +747,6 @@ def predict_with_loaded_models(image_path: str, audio_path: str, model: Any, if_
     }
 
     return result
-
-
-# -------------------------
-# Backwards-compatible predict()
-# -------------------------
 
 
 def predict(image_path: str, audio_path: str, multimodal_path: Any, if_path: Any, labels=None, device=None):
