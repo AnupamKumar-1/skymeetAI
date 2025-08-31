@@ -27,7 +27,6 @@ platformdirs>=4.0.0
 pooch>=1.8.0
 lz4>=4.0.0
 gunicorn
-torch==2.5.1+cpu
-torchvision==0.20.1+cpu
-torchaudio==2.5.1+cpu
--f https://download.pytorch.org/whl/torch_stable.html
+torch==2.5.1
+torchvision==0.20.1
+torchaudio==2.5.1
