@@ -27,6 +27,7 @@ import numpy as np
 import soundfile as sf
 from werkzeug.utils import secure_filename
 from typing import Optional
+from emotion_service.inference import predict
 
 # Import the inference module robustly (ensure we get the module, not a function)
 try:
