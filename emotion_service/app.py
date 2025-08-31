@@ -554,4 +554,4 @@ def analyze():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "5002"))
     # debug True for dev; set False in production
-    app.run(host="0.0.0.0", port=port, debug=True)
+    app.run(host="0.0.0.0", port=port, debug=False)
