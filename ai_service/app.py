@@ -1,4 +1,3 @@
-# ai_service/app.py
 import os
 import uuid
 import json
@@ -112,7 +111,6 @@ def _extract_label_from_pipeline_output(raw_output):
         pass
     return "neutral"
 
-# -------- Main API ----------
 
 @app.route("/process_meeting", methods=["POST"])
 def process_meeting():
@@ -253,4 +251,6 @@ def download_output(filename):
     return send_from_directory(OUTPUT_FOLDER, filename, as_attachment=True)
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5001, debug=True)
+    import os
+    port = int(os.environ.get("PORT", 5001))
+    app.run(host="0.0.0.0", port=port, debug=False)
