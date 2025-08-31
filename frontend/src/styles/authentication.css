@@ -1,0 +1,158 @@
+/* Background gradient animation */
+@keyframes bgGradient {
+    0% {
+        background-position: 0% 50%;
+    }
+
+    50% {
+        background-position: 100% 50%;
+    }
+
+    100% {
+        background-position: 0% 50%;
+    }
+}
+
+/* Fade in + up animation */
+@keyframes fadeInUp {
+    0% {
+        opacity: 0;
+        transform: translateY(24px);
+    }
+
+    100% {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* Global fallback to prevent white flash */
+:root {
+    --auth-bg: #020617;
+    --auth-hero-fallback: #0b1428;
+}
+
+html,
+body,
+#root {
+    height: 100%;
+    background-color: var(--auth-bg);
+}
+
+/* Main container */
+.auth-root {
+    height: 100vh;
+    background: linear-gradient(270deg, #020617, #031026, #020617);
+    background-size: 600% 600%;
+    animation: bgGradient 14s ease infinite;
+    background-color: var(--auth-bg);
+    /* fallback */
+}
+
+/* Left hero image overlay */
+.auth-hero {
+    position: relative;
+    background-repeat: no-repeat;
+    background-size: cover;
+    background-position: center;
+    background-color: var(--auth-hero-fallback);
+    /* fallback if image fails */
+}
+
+.auth-hero::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.4);
+}
+
+/* Right panel */
+.auth-panel {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 32px;
+    background: transparent !important;
+    /* prevent Paper default white */
+}
+
+/* Form card */
+.auth-box {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 100%;
+    max-width: 520px;
+    border-radius: 24px;
+    padding: 40px;
+    background: rgba(255, 255, 255, 0.06);
+    backdrop-filter: blur(20px) saturate(1.5);
+    -webkit-backdrop-filter: blur(20px) saturate(1.5);
+    /* Safari */
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
+    animation: fadeInUp 0.8s ease forwards;
+}
+
+/* Avatar */
+.auth-avatar {
+    margin: 8px;
+    box-shadow: 0 4px 20px rgba(0, 150, 255, 0.4);
+}
+
+/* Title */
+.auth-title {
+    font-weight: 700 !important;
+    margin-bottom: 16px !important;
+    color: #fff !important;
+}
+
+/* Toggle buttons row */
+.auth-toggle {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 24px;
+    width: 100%;
+}
+
+.auth-toggle button {
+    flex: 1;
+    font-weight: 600;
+    border-radius: 12px !important;
+    padding: 10px 0 !important;
+}
+
+/* Form fields */
+.auth-input .MuiOutlinedInput-root {
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.08);
+    color: #fff;
+}
+
+.auth-input input {
+    color: #fff;
+}
+
+.auth-input label {
+    color: rgba(255, 255, 255, 0.8);
+}
+
+/* Error text */
+.auth-error {
+    color: #f44336;
+    margin-top: 8px;
+}
+
+/* Submit button */
+.auth-submit {
+    margin-top: 24px !important;
+    margin-bottom: 16px !important;
+    padding: 14px 0 !important;
+    font-weight: 700 !important;
+    font-size: 1rem !important;
+    border-radius: 12px !important;
+    box-shadow: 0 8px 24px rgba(0, 150, 255, 0.25) !important;
+}
+
+.auth-submit:hover {
+    box-shadow: 0 10px 28px rgba(0, 150, 255, 0.4) !important;
+}

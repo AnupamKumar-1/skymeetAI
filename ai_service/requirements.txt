@@ -1,0 +1,7 @@
+flask
+flask-cors
+werkzeug
+pydub
+openai-whisper @ git+https://github.com/openai/whisper.git
+transformers
+torch

@@ -1,0 +1,58 @@
+# -------------------------
+# Python virtual environments
+# -------------------------
+emotion-venv/
+venv/
+.venv/
+env/
+
+# -------------------------
+# App-generated outputs
+# -------------------------
+uploads/
+outputs/
+data/
+emotion_service/preprocessed_audio/
+emotion_service/preprocessed_images/
+
+# -------------------------
+# Node.js dependencies
+# -------------------------
+node_modules/
+.pnp/
+.pnp.js
+
+# -------------------------
+# Testing & Build artifacts
+# -------------------------
+coverage/
+build/
+
+# -------------------------
+# Python cache
+# -------------------------
+__pycache__/
+*.py[cod]
+
+# -------------------------
+# Environment / secrets (ignore anywhere)
+# -------------------------
+.env
+.env.local
+.env.*.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# -------------------------
+# Logs
+# -------------------------
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# -------------------------
+# OS junk files
+# -------------------------
+.DS_Store
+Thumbs.db
