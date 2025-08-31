@@ -1,7 +1,4 @@
 
-
-
-// AuthContext.jsx
 import axios from "axios";
 import httpStatus from "http-status";
 import { createContext, useState, useEffect, useCallback } from "react";
@@ -10,27 +7,17 @@ import server from "../environment";
 
 export const AuthContext = createContext({});
 
-/**
- * Existing client used for user-scoped endpoints (users/*).
- * We keep it as-is so existing endpoints continue to work.
- */
+
 const client = axios.create({
   baseURL: `${server}/api/v1/users`,
 });
 
-/**
- * A small axios instance for top-level API calls (meetings etc).
- * We will attach Authorization header manually when needed.
- */
+
 const apiClient = axios.create({
   baseURL: `${server}/api/v1`,
   timeout: 10_000,
 });
 
-/**
- * CONTROL: enable global /meetings by default.
- * - To disable, set REACT_APP_SUPPORTS_GLOBAL_MEETINGS="false" in your env.
- */
 const SUPPORTS_GLOBAL_MEETINGS =
   process.env.REACT_APP_SUPPORTS_GLOBAL_MEETINGS === "false" ? false : true;
 
@@ -48,7 +35,7 @@ export const AuthProvider = ({ children }) => {
         try {
           router("/login");
         } catch (e) {
-          /* router may not be available in some tests */
+
         }
       }
     },
@@ -56,14 +43,14 @@ export const AuthProvider = ({ children }) => {
   );
 
   useEffect(() => {
-    // attach token on every request for the user-scoped client
+
     const reqInterceptor = client.interceptors.request.use(
       (config) => {
         const token = localStorage.getItem("token");
         config.headers = config.headers || {};
         if (token) {
           config.headers.Authorization = `Bearer ${token}`;
-          // also keep apiClient in sync
+
           apiClient.defaults.headers.common["Authorization"] = `Bearer ${token}`;
         }
         console.debug(
@@ -75,7 +62,6 @@ export const AuthProvider = ({ children }) => {
       (err) => Promise.reject(err)
     );
 
-    // handle 401 globally
     const resInterceptor = client.interceptors.response.use(
       (resp) => resp,
       (err) => {
@@ -110,7 +96,6 @@ export const AuthProvider = ({ children }) => {
       console.log("login response:", request.data);
 
       if (request.status === httpStatus.OK) {
-        // ✅ your server sends `accessToken`
         const token =
           request.data?.accessToken ??
           request.data?.token ??
@@ -138,29 +123,15 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  // Helper to build Authorization headers for non-client requests
   const getAuthHeaders = () => {
     const token = localStorage.getItem("token");
     return token ? { Authorization: `Bearer ${token}` } : {};
   };
 
-  /**
-   * getHistoryOfUser
-   *
-   * Returns an array of meeting/history items.
-   * Strategy:
-   *  1) Try global GET /meetings (preferred if supported)
-   *  2) Try users-scoped GET /users/meetings (fallback)
-   *  3) Try legacy GET /get_all_activity (user client)
-   *  4) Fallback to localStorage 'meeting_history_v1'
-   *
-   * Always returns an array (never throws) so consumers can render safely.
-   */
   const getHistoryOfUser = async () => {
     try {
       const isAuth = !!localStorage.getItem("token");
 
-      // 1) Try global /meetings first (new preferred route)
       if (SUPPORTS_GLOBAL_MEETINGS) {
         try {
           const query = isAuth ? "/meetings?mine=true" : "/meetings";
@@ -188,7 +159,6 @@ export const AuthProvider = ({ children }) => {
         console.debug("SUPPORTS_GLOBAL_MEETINGS is false — skipping /meetings attempt");
       }
 
-      // 2) Try users-scoped meetings endpoint (where older servers may expose it)
       try {
         const usersQuery = isAuth ? "/users/meetings?mine=true" : "/users/meetings";
         const respUsers = await apiClient.get(usersQuery, {
@@ -205,8 +175,6 @@ export const AuthProvider = ({ children }) => {
       } catch (err) {
         console.debug("/users/meetings attempt failed or empty:", err?.response?.status ?? err);
       }
-
-      // 3) legacy user-scoped endpoint
       try {
         const request = await client.get("/get_all_activity");
         const payload = request?.data ?? {};
@@ -224,7 +192,6 @@ export const AuthProvider = ({ children }) => {
         console.debug("get_all_activity failed or empty:", err?.response?.status ?? err);
       }
 
-      // 4) fallback to localStorage
       try {
         const raw = localStorage.getItem("meeting_history_v1");
         if (!raw) return [];
@@ -240,15 +207,6 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  /**
-   * addToUserHistory
-   *
-   * Normalizes a meeting payload and tries to save it:
-   *  1) POST /meetings (preferred global upsert)
-   *  2) POST /users/meetings (fallback)
-   *  3) POST /users/add_to_activity (legacy user client)
-   *  4) localStorage fallback
-   */
   const addToUserHistory = async (meetingPayload) => {
     const payloadObj =
       typeof meetingPayload === "string"
@@ -271,7 +229,6 @@ export const AuthProvider = ({ children }) => {
 
     const isAuth = !!localStorage.getItem("token");
 
-    // 1) Try POST /meetings (global upsert)
     if (SUPPORTS_GLOBAL_MEETINGS) {
       try {
         const resp = await apiClient.post("/meetings", body, {
@@ -293,7 +250,6 @@ export const AuthProvider = ({ children }) => {
       console.debug("SUPPORTS_GLOBAL_MEETINGS is false — skipping POST /meetings attempt");
     }
 
-    // 2) Try POST /users/meetings
     try {
       const respUsers = await apiClient.post("/users/meetings", body, {
         headers: { "Content-Type": "application/json", ...(isAuth ? getAuthHeaders() : {}) },
@@ -306,7 +262,6 @@ export const AuthProvider = ({ children }) => {
       console.debug("POST /users/meetings failed or not present:", err?.response?.status ?? err);
     }
 
-    // 3) legacy user-scoped endpoint — keep old behavior for compatibility
     try {
       const request = await client.post("/add_to_activity", {
         meeting_code: payloadObj.meetingCode,
@@ -316,12 +271,10 @@ export const AuthProvider = ({ children }) => {
       console.warn("user-scoped add_to_activity failed — falling back to localStorage", err?.response?.status ?? err);
     }
 
-    // 4) Final fallback: write to localStorage so UI can read it
     try {
       const key = "meeting_history_v1";
       const raw = localStorage.getItem(key);
       const arr = raw ? JSON.parse(raw) : [];
-      // dedupe by meetingCode if present
       if (payloadObj.meetingCode) {
         const idx = arr.findIndex((m) => m.meetingCode === payloadObj.meetingCode);
         const newEntry = {
@@ -336,7 +289,6 @@ export const AuthProvider = ({ children }) => {
         if (idx >= 0) arr[idx] = newEntry;
         else arr.unshift(newEntry);
       } else {
-        // push a best-effort entry
         arr.unshift({
           meetingCode: payloadObj.meetingCode || `misc-${Date.now()}`,
           hostName: payloadObj.hostName || "Host",
@@ -376,7 +328,6 @@ export const AuthProvider = ({ children }) => {
       console.debug("POST /meetings/:code/participants failed:", err?.response?.status ?? err);
     }
 
-    // 2) fallback older endpoint
     try {
       const resp = await apiClient.post(
         "/meetings/add_participant",
@@ -393,7 +344,6 @@ export const AuthProvider = ({ children }) => {
       console.debug("POST /meetings/add_participant failed:", err?.response?.status ?? err);
     }
 
-    // 3) no server endpoint available — surface an error to caller
     throw new Error("Unable to add participant: server endpoints failed or not available");
   };
 

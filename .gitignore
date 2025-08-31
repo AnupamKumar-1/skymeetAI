@@ -14,6 +14,8 @@ outputs/
 data/
 emotion_service/preprocessed_audio/
 emotion_service/preprocessed_images/
+emotion_service/embeddings_images.h5
+emotion_service/embeddings_audio.h5
 
 # -------------------------
 # Node.js dependencies

@@ -13,14 +13,3 @@ def inspect(path):
 inspect("embeddings_audio.h5")
 inspect("embeddings_images.h5")
 
-# import h5py
-
-# audio_h5 = "embeddings_audio.h5"
-
-# with h5py.File(audio_h5, 'r') as f:
-#     labels = [str(x).strip().lower() for x in f['all/labels'][:]]
-#     unique_labels = sorted(set(labels))
-#     print("Unique audio labels:", unique_labels)
-#     print("Counts per label:")
-#     for lbl in unique_labels:
-#         print(lbl, labels.count(lbl))
