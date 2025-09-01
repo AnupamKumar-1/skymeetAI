@@ -670,10 +670,10 @@ import uuid
 import json
 import subprocess
 import shlex
-import re
 import threading
+import traceback
 from collections import Counter
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory, make_response, Response
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 
@@ -686,11 +686,13 @@ UPLOAD_FOLDER = "uploads"
 OUTPUT_FOLDER = "outputs"
 ALLOWED_EXT = {"webm", "wav", "mp3", "m4a", "ogg", "aac", "mp4"}
 CLEANUP_DELAY_SEC = int(os.environ.get("CLEANUP_DELAY_SEC", 120))
+ALLOWED_ORIGIN = os.environ.get("ALLOWED_ORIGIN", "https://skymeetai.onrender.com")
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
 app = Flask(__name__)
+# Keep this for broad compatibility; we also add an after_request to guarantee headers on errors
 CORS(app, resources={r"/*": {"origins": "*"}})
 
 # Choose a default ASR model. Pick a small one for limited RAM (examples below).
@@ -706,19 +708,46 @@ def allowed_file(filename):
 
 
 def convert_to_wav(src_path, dst_path):
-    cmd = f'ffmpeg -y -i {shlex.quote(src_path)} -ac 1 -ar 16000 -vn {shlex.quote(dst_path)}'
-    proc = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if proc.returncode != 0:
-        stderr = proc.stderr.decode("utf-8", errors="ignore")
-        raise RuntimeError(f"ffmpeg conversion failed: {stderr}")
+    """Convert audio to mono 16k WAV using ffmpeg. Raises RuntimeError with stderr if conversion fails."""
+    try:
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-i",
+            src_path,
+            "-ac",
+            "1",
+            "-ar",
+            "16000",
+            "-vn",
+            dst_path,
+        ]
+        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
+        if proc.returncode != 0:
+            stderr = proc.stderr.decode("utf-8", errors="ignore")
+            raise RuntimeError(f"ffmpeg conversion failed: {stderr}")
+    except FileNotFoundError:
+        raise RuntimeError("ffmpeg not found on PATH. Install ffmpeg and ffprobe.")
 
 
 def get_audio_duration(path):
     try:
-        cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", path]
+        cmd = [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            path,
+        ]
         p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
         out = p.stdout.decode().strip()
         return float(out)
+    except FileNotFoundError:
+        app.logger.warning("ffprobe not found on PATH; cannot get duration")
+        return None
     except Exception:
         return None
 
@@ -761,7 +790,6 @@ def load_models_if_needed():
             print(f"[models] Loading ASR pipeline: {ASR_MODEL_NAME} ...")
             from transformers import pipeline as _pipeline
             # CPU usage (device=-1). chunk_length_s helps processing long audio without OOM.
-            # Some models support return_timestamps; behavior varies by model. We'll handle outputs flexibly.
             asr_pipeline = _pipeline("automatic-speech-recognition", model=ASR_MODEL_NAME, chunk_length_s=30)
             print("[models] ASR pipeline loaded.")
         except Exception as e:
@@ -792,7 +820,6 @@ def _parse_asr_output(raw, wav_path=None):
         # Case 2: pipeline returns 'chunks' (some models)
         if isinstance(raw, dict) and 'chunks' in raw:
             for c in raw['chunks']:
-                # chunk may contain 'text' and 'timestamp' or 'chunk' info
                 text = c.get('text') or c.get('chunk') or ''
                 start = c.get('timestamp', [0, 0])[0] if isinstance(c.get('timestamp'), (list, tuple)) else c.get('start', 0.0)
                 end = c.get('timestamp', [0, 0])[1] if isinstance(c.get('timestamp'), (list, tuple)) else c.get('end', start)
@@ -806,7 +833,6 @@ def _parse_asr_output(raw, wav_path=None):
             return segments
 
         if isinstance(raw, (list, tuple)):
-            # sometimes pipeline returns a list of dicts
             for part in raw:
                 if isinstance(part, dict) and 'text' in part:
                     segments.append({'start': float(part.get('start', 0.0)), 'end': float(part.get('end', 0.0)), 'text': (part.get('text') or '').strip()})
@@ -825,6 +851,66 @@ def _parse_asr_output(raw, wav_path=None):
         pass
 
     return segments
+
+
+# --- Robust CORS + error handling so errors return JSON with traceback ---
+@app.after_request
+def add_cors_headers(response):
+    origin = ALLOWED_ORIGIN or "*"
+    response.headers.setdefault("Access-Control-Allow-Origin", origin)
+    response.headers.setdefault("Access-Control-Allow-Headers", "Content-Type,Authorization")
+    response.headers.setdefault("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
+    return response
+
+
+@app.errorhandler(Exception)
+def handle_all_exceptions(e):
+    app.logger.exception("Unhandled exception during request")
+    tb = traceback.format_exc()
+    body = {"success": False, "error": str(e), "traceback": tb}
+    resp = make_response(jsonify(body), 500)
+    origin = ALLOWED_ORIGIN or "*"
+    resp.headers["Access-Control-Allow-Origin"] = origin
+    resp.headers["Access-Control-Allow-Headers"] = "Content-Type,Authorization"
+    resp.headers["Access-Control-Allow-Methods"] = "GET,POST,OPTIONS"
+    return resp
+
+
+# Explicit OPTIONS handler (safe to keep)
+@app.route("/process_meeting", methods=["OPTIONS"])
+def process_meeting_options():
+    resp = Response()
+    origin = ALLOWED_ORIGIN or "*"
+    resp.headers["Access-Control-Allow-Origin"] = origin
+    resp.headers["Access-Control-Allow-Methods"] = "POST,OPTIONS"
+    resp.headers["Access-Control-Allow-Headers"] = "Content-Type,Authorization"
+    return resp
+
+
+@app.route("/debug_upload", methods=["POST"])
+def debug_upload():
+    """Lightweight endpoint to verify uploads + ffmpeg conversion without loading HF models."""
+    f = request.files.get("audio_files")
+    if not f:
+        return jsonify({"success": False, "error": "no audio_files uploaded"}), 400
+    filename = secure_filename(f.filename)
+    save_path = os.path.join(UPLOAD_FOLDER, filename)
+    try:
+        f.save(save_path)
+    except Exception as e:
+        app.logger.exception("Failed to save uploaded file")
+        return jsonify({"success": False, "error": "save failed", "detail": str(e)}), 500
+
+    base_name = os.path.splitext(filename)[0]
+    wav_path = os.path.join(UPLOAD_FOLDER, f"{base_name}.wav")
+    try:
+        convert_to_wav(save_path, wav_path)
+    except Exception as e:
+        app.logger.exception("ffmpeg conversion failed")
+        return jsonify({"success": False, "error": "ffmpeg failed", "detail": str(e)}), 500
+
+    dur = get_audio_duration(wav_path)
+    return jsonify({"success": True, "saved": save_path, "wav": wav_path, "duration": dur}), 200
 
 
 @app.route("/process_meeting", methods=["POST"])
@@ -858,19 +944,20 @@ def process_meeting():
                 convert_to_wav(save_path, wav_path)
                 created_file_paths.append(wav_path)
             except Exception as e:
-                print(f"ffmpeg convert failed for {save_path}: {e}. Using original file.")
+                # conversion failed: keep original file and continue, but log the error
+                app.logger.exception(f"ffmpeg convert failed for {save_path}: {e}. Using original file.")
                 wav_path = save_path
 
             asr_result = {"segments": []}
             if asr_pipeline is None:
-                print("[process] ASR pipeline not available; skipping transcription for file:", save_path)
+                app.logger.info("[process] ASR pipeline not available; skipping transcription for file: %s", save_path)
             else:
                 try:
                     raw = asr_pipeline(wav_path)
                     segs = _parse_asr_output(raw, wav_path=wav_path)
                     asr_result = {"segments": segs}
                 except Exception as e:
-                    print(f"ASR pipeline failed for {wav_path}: {e}")
+                    app.logger.exception(f"ASR pipeline failed for {wav_path}: {e}")
                     asr_result = {"segments": []}
 
             segs_with_emo = []
@@ -885,7 +972,7 @@ def process_meeting():
                         raw_emo = emotion_pipeline(text, top_k=1)
                         emo_label = _extract_label_from_pipeline_output(raw_emo)
                     except Exception as e:
-                        print(f"[emotion] pipeline failed for text segment: {e}")
+                        app.logger.exception(f"[emotion] pipeline failed for text segment: {e}")
                         emo_label = "neutral"
 
                 segs_with_emo.append({
