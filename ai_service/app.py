@@ -676,6 +676,7 @@ from collections import Counter
 from flask import Flask, request, jsonify, send_from_directory, make_response, Response
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
+from werkzeug.exceptions import HTTPException
 
 # Lazy-loaded HF pipelines
 asr_pipeline = None
@@ -854,6 +855,7 @@ def _parse_asr_output(raw, wav_path=None):
 
 
 # --- Robust CORS + error handling so errors return JSON with traceback ---
+
 @app.after_request
 def add_cors_headers(response):
     origin = ALLOWED_ORIGIN or "*"
@@ -863,8 +865,21 @@ def add_cors_headers(response):
     return response
 
 
+# simple health route so platform checks don't produce noisy 404/500 logs
+@app.route("/", methods=["GET", "HEAD"])
+@app.route("/health", methods=["GET", "HEAD"])
+def health_check():
+    return jsonify({"status": "ok"}), 200
+
+
+# improved error handler: let HTTPExceptions (404, 405, etc.) pass with their status code,
+# while unexpected exceptions return traceback JSON (useful during debugging).
 @app.errorhandler(Exception)
 def handle_all_exceptions(e):
+    if isinstance(e, HTTPException):
+        # return structured JSON for HTTP errors (avoid treating them as internal server errors)
+        return jsonify({"success": False, "error": e.description}), e.code
+
     app.logger.exception("Unhandled exception during request")
     tb = traceback.format_exc()
     body = {"success": False, "error": str(e), "traceback": tb}
@@ -873,6 +888,17 @@ def handle_all_exceptions(e):
     resp.headers["Access-Control-Allow-Origin"] = origin
     resp.headers["Access-Control-Allow-Headers"] = "Content-Type,Authorization"
     resp.headers["Access-Control-Allow-Methods"] = "GET,POST,OPTIONS"
+    return resp
+
+
+# Explicit OPTIONS handler (safe to keep)
+@app.route("/process_meeting", methods=["OPTIONS"])
+def process_meeting_options():
+    resp = Response()
+    origin = ALLOWED_ORIGIN or "*"
+    resp.headers["Access-Control-Allow-Origin"] = origin
+    resp.headers["Access-Control-Allow-Methods"] = "POST,OPTIONS"
+    resp.headers["Access-Control-Allow-Headers"] = "Content-Type,Authorization"
     return resp
 
 
