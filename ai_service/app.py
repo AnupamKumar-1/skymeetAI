@@ -10,11 +10,7 @@ from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 
-# Optional: if you plan to use faster startup logs
-
-# Lazy ML imports to avoid heavy work during module import
-import whisper
-from transformers import pipeline
+# Note: heavy ML libs are imported lazily inside load_models_if_needed()
 
 MIN_DURATION_SEC = 0.30
 MIN_TEXT_CHARS = 3
@@ -36,7 +32,8 @@ app = Flask(__name__)
 CORS(app)
 
 # Configure model names via environment so you can switch in Render UI
-ASR_MODEL_NAME = os.environ.get("ASR_MODEL", "tiny")  # tiny|base|small|medium
+# Prefer tiny.en (English-only tiny) for lower memory footprint; change via env ASR_MODEL
+ASR_MODEL_NAME = os.environ.get("ASR_MODEL", "tiny.en")  # tiny.en|tiny|base|small|medium
 EMOTION_MODEL_NAME = os.environ.get(
     "EMOTION_MODEL",
     "j-hartmann/emotion-english-distilroberta-base",
@@ -97,9 +94,8 @@ def schedule_file_cleanup(file_paths, delay=CLEANUP_DELAY_SEC):
 
 def _extract_label_from_pipeline_output(raw_output):
     """
-    Given the raw output from a HuggingFace text-classification pipeline (which can be
-    a dict, list-of-dicts, nested lists, etc.), return a single label string.
-    If extraction fails, return "neutral" as a safe fallback.
+    Safely extract a single label string from a HuggingFace pipeline output.
+    Fallback: 'neutral'
     """
     try:
         if isinstance(raw_output, dict):
@@ -108,7 +104,7 @@ def _extract_label_from_pipeline_output(raw_output):
         if isinstance(raw_output, (list, tuple)) and len(raw_output) > 0:
             first = raw_output[0]
             if isinstance(first, dict) and "label" in first:
-                return first[label]
+                return first["label"]
             if isinstance(first, (list, tuple)) and len(first) > 0 and isinstance(first[0], dict) and "label" in first[0]:
                 return first[0]["label"]
             if isinstance(first, str):
@@ -119,30 +115,52 @@ def _extract_label_from_pipeline_output(raw_output):
 
 
 def load_models_if_needed():
-    """Lazy-loads the ASR and emotion models on first request.
+    """Lazy-load ASR and emotion models on first request with safe fallbacks.
 
-    This reduces memory pressure during container startup and makes health-checks
-    / deploy scans less likely to trigger out-of-memory errors on small instances.
+    This avoids importing heavy libraries at module import time and ensures the
+    server can still respond (with degraded capability) if model loading fails.
     """
     global asr_model, emotion_pipeline
-    try:
-        if asr_model is None:
-            print(f"[models] Loading Whisper ASR model: {ASR_MODEL_NAME} ...")
-            asr_model = whisper.load_model(ASR_MODEL_NAME)
-            print("[models] Whisper loaded.")
-    except Exception as e:
-        print(f"[models] Failed to load Whisper model ({ASR_MODEL_NAME}): {e}")
-        asr_model = None
 
-    try:
-        if emotion_pipeline is None:
-            print(f"[models] Loading emotion classifier: {EMOTION_MODEL_NAME} ...")
-            # device=-1 forces CPU; change if you deploy to GPU-enabled instance and want to use it
-            emotion_pipeline = pipeline("text-classification", model=EMOTION_MODEL_NAME, top_k=1, device=-1)
+    # --- ASR (Whisper) ---
+    if asr_model is None:
+        model_name = os.environ.get("ASR_MODEL", ASR_MODEL_NAME) or ASR_MODEL_NAME
+        # prefer tiny.en by default (lower RAM than multilingual tiny)
+        if model_name == "tiny":
+            model_name = "tiny.en"
+        try:
+            print(f"[models] Loading Whisper ASR model: {model_name} ...")
+            # import lazily
+            import whisper as _whisper
+            asr_model = _whisper.load_model(model_name)
+            print("[models] Whisper loaded.")
+        except MemoryError as me:
+            print(f"[models] MemoryError loading Whisper ({model_name}): {me}")
+            asr_model = None
+        except Exception as e:
+            print(f"[models] Failed to load Whisper model ({model_name}): {e}")
+            asr_model = None
+
+    # --- Emotion classifier (optional) ---
+    # If EMOTION_MODEL env var is empty string or not set to a model name, skip loading.
+    env_emotion_model = os.environ.get("EMOTION_MODEL", EMOTION_MODEL_NAME)
+    if (emotion_pipeline is None) and env_emotion_model:
+        try:
+            print(f"[models] Loading emotion classifier: {env_emotion_model} ...")
+            # lazy import the HF pipeline
+            from transformers import pipeline as _pipeline
+            # device=-1 forces CPU
+            emotion_pipeline = _pipeline("text-classification", model=env_emotion_model, top_k=1, device=-1)
             print("[models] Emotion classifier loaded.")
-    except Exception as e:
-        print(f"[models] Failed to load emotion classifier ({EMOTION_MODEL_NAME}): {e}")
-        emotion_pipeline = None
+        except MemoryError as me:
+            print(f"[models] MemoryError loading emotion model ({env_emotion_model}): {me}")
+            emotion_pipeline = None
+        except Exception as e:
+            print(f"[models] Failed to load emotion classifier ({env_emotion_model}): {e}")
+            emotion_pipeline = None
+    else:
+        if not env_emotion_model:
+            print("[models] EMOTION_MODEL empty — skipping emotion pipeline.")
 
 
 @app.route("/process_meeting", methods=["POST"])
@@ -206,7 +224,9 @@ def process_meeting():
                         print(f"[emotion] pipeline failed for text segment: {e}")
                         emo_label = "neutral"
                 else:
-                    print("[process] Emotion pipeline not available; using fallback 'neutral'")
+                    # quiet log to avoid spamming logs for every segment in production
+                    # print("[process] Emotion pipeline not available; using fallback 'neutral'")
+                    pass
 
                 segs_with_emo.append({
                     "start": seg.get("start", 0.0),
@@ -255,7 +275,7 @@ def process_meeting():
 
     lines = []
     for g in groups:
-        lines.append(f"[{g['start']:.2f}–{g['end']:.2f}] {g['speaker']}:")
+        lines.append(f"[{g['start']:.2f}\u2013{g['end']:.2f}] {g['speaker']}:")
         for t in g["texts"]:
             lines.append(f"    {t}")
         lines.append("")
