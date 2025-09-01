@@ -27,6 +27,14 @@ import numpy as np
 import soundfile as sf
 from werkzeug.utils import secure_filename
 from typing import Optional
+
+# Ensure repo root is importable so 'emotion_service.training.train_multimodal' imports succeed
+# (this is the key fix for "No module named 'emotion_service'" when torch.load() needs the class)
+import sys
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
 from inference import predict
 
 # Import the inference module robustly (ensure we get the module, not a function)
