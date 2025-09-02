@@ -5,7 +5,7 @@
 `emotion_service` is a modular pipeline for building, training and evaluating multimodal emotion models (audio + image / face) and for running anomaly detection on the resulting embeddings. It includes preprocessing utilities, embedding extraction, paired HDF5 builders, training scripts (multimodal classification), and an anomaly detector (Isolation Forest). The repo expects datasets formatted into image and audio folders (examples below: CREMA‑D and AffectNetAligned).
 
 Datasets referenced in this project:
-- CREMA‑D (audio + video): https://www.kaggle.com/datasets/ejlok1/cremad
+- CREMA‑D: https://www.kaggle.com/datasets/ejlok1/cremad
 - AffectNet Aligned (face images): https://www.kaggle.com/datasets/yakhyokhuja/affectnetaligned
 
 ---
