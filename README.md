@@ -9,8 +9,6 @@ SkymeetAI is a modular meeting platform designed to meet high-scale production r
 - Optional per-clip emotion-analysis pipeline for ML-enabled UX features.
 - An AI microservice integrating Whisper ASR + text-level emotion classification for fast, auditable transcripts.
 
-This README focuses on operational robustness, reproducible deployment, API stability, security, and monitoring — the attributes that matter at FAANG-scale product teams.
-
 ---
 
 
