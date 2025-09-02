@@ -1,36 +1,6 @@
-# SkymeetAI — FAANG-style Technical README
-
-> **SkymeetAI / VideoMeet** — Enterprise-grade, production-ready architecture for in-browser WebRTC meetings, host-side transcription, optional emotion analysis, and end-to-end observability. This document is written and organized with the clarity, operational rigor, and product-architecture mindset expected at FAANG-scale engineering teams.
+# SkymeetAI
 
 ---
-
-## Table of contents
-
-- [SkymeetAI — FAANG-style Technical README](#skymeetai--faang-style-technical-readme)
-  - [Table of contents](#table-of-contents)
-  - [Executive summary](#executive-summary)
-  - [Goals \& non-goals](#goals--non-goals)
-  - [High-level architecture](#high-level-architecture)
-  - [Component responsibilities](#component-responsibilities)
-  - [API contracts (stable surface)](#api-contracts-stable-surface)
-    - [`POST /api/v1/rooms`  — create room](#post-apiv1rooms---create-room)
-    - [`POST /process_meeting` (ai\_service)](#post-process_meeting-ai_service)
-    - [`POST /api/v1/emotion` — upload clip](#post-apiv1emotion--upload-clip)
-  - [Signalling \& WebRTC flow (deterministic)](#signalling--webrtc-flow-deterministic)
-  - [Security, privacy \& compliance](#security-privacy--compliance)
-  - [Scalability \& resiliency strategy](#scalability--resiliency-strategy)
-  - [Observability \& SLOs](#observability--slos)
-  - [Operational runbook (incidents \& routine ops)](#operational-runbook-incidents--routine-ops)
-  - [Deployment \& CI/CD (recommended)](#deployment--cicd-recommended)
-  - [Developer quickstart \& local dev matrix](#developer-quickstart--local-dev-matrix)
-  - [Troubleshooting \& FAQ (engineered checks)](#troubleshooting--faq-engineered-checks)
-  - [Appendix: CLI flags, service envs, and contacts](#appendix-cli-flags-service-envs-and-contacts)
-    - [Key CLI flags (selected)](#key-cli-flags-selected)
-    - [Must-set service envs (core)](#must-set-service-envs-core)
-
----
-
-## Executive summary
 
 SkymeetAI is a modular meeting platform designed to meet high-scale production requirements. It provides:
 
@@ -43,19 +13,6 @@ This README focuses on operational robustness, reproducible deployment, API stab
 
 ---
 
-## Goals & non-goals
-
-**Goals**
-- Production-ready deployment patterns (k8s + autoscaling + Redis adapter for Socket.IO).
-- Clear, minimal, and stable HTTP + socket API for external integrations.
-- Deterministic media handling so downstream ML systems receive consistent inputs.
-- Observability and SLOs for signalling latency, media upload success, transcript latency.
-
-**Non-goals**
-- Providing every possible ML model or training recipe (emotion pipeline is pluggable).
-- On-device advanced ML inference (we assume server-side inference for scale and governance).
-
----
 
 ## High-level architecture
 
@@ -78,7 +35,7 @@ This README focuses on operational robustness, reproducible deployment, API stab
 **Notes:**
 - The signalling server is horizontally scalable behind a Load Balancer and uses Redis Pub/Sub (Socket.IO adapter) for cross-node message routing.
 - Media blobs are uploaded to an object store (S3 or equivalent) for durable processing; the backend forwards references to ML microservices.
-- Whisper / AI services are independent microservices (Docker) and should be pinned to specific model versions for reproducibility.
+- Whisper / AI services are independent microservices and should be pinned to specific model versions for reproducibility.
 
 ---
 
