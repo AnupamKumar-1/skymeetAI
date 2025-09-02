@@ -2,69 +2,81 @@ import os
 import uuid
 import json
 import subprocess
+import shlex
+import re
 import threading
-import traceback
+import time
 from collections import Counter
-from flask import Flask, request, jsonify, send_from_directory, make_response, Response
+from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
-from werkzeug.exceptions import HTTPException
 
-# Lazy-loaded HF pipelines
-asr_pipeline = None
-emotion_pipeline = None
+import whisper
+from transformers import pipeline
 
+MIN_DURATION_SEC = 0.30
 MIN_TEXT_CHARS = 3
+NO_SPEECH_PROB_THRESH = 0.6
+AVG_LOGPROB_THRESH = -1.5
+ENABLE_FFMPEG_ENERGY_check = False
+MIN_MEAN_VOLUME_DB = -45.0
+
 UPLOAD_FOLDER = "uploads"
 OUTPUT_FOLDER = "outputs"
 ALLOWED_EXT = {"webm", "wav", "mp3", "m4a", "ogg", "aac", "mp4"}
-CLEANUP_DELAY_SEC = int(os.environ.get("CLEANUP_DELAY_SEC", 120))
-ALLOWED_ORIGIN = os.environ.get("ALLOWED_ORIGIN", "https://skymeetai.onrender.com")
+
+CLEANUP_DELAY_SEC = 120
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "*"}})
+CORS(app)
 
-ASR_MODEL_NAME = os.environ.get("ASR_MODEL", "facebook/wav2vec2-base-960h")
-EMOTION_MODEL_NAME = os.environ.get("EMOTION_MODEL", "j-hartmann/emotion-english-distilroberta-base")
+# Load models at startup
+print("Loading Whisper model (this can take time)...")
+asr_model = whisper.load_model("small")
+
+print("Loading emotion classifier (HuggingFace pipeline)...")
+
+# keep top_k=1 for efficiency
+emotion_pipeline = pipeline(
+    "text-classification",
+    model="j-hartmann/emotion-english-distilroberta-base",
+    top_k=1
+)
 
 
 def allowed_file(filename):
     ext = filename.rsplit(".", 1)[-1].lower()
     return ext in ALLOWED_EXT
 
-
 def convert_to_wav(src_path, dst_path):
+    cmd = f'ffmpeg -y -i {shlex.quote(src_path)} -ac 1 -ar 16000 -vn {shlex.quote(dst_path)}'
+    proc = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if proc.returncode != 0:
+        stderr = proc.stderr.decode('utf-8', errors='ignore')
+        raise RuntimeError(f"ffmpeg conversion failed: {stderr}")
+
+def segment_mean_volume(source_file, start, duration):
     try:
-        cmd = [
-            "ffmpeg", "-y", "-i", src_path,
-            "-ac", "1", "-ar", "16000", "-vn", dst_path,
-        ]
-        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
-        if proc.returncode != 0:
-            stderr = proc.stderr.decode("utf-8", errors="ignore")
-            raise RuntimeError(f"ffmpeg conversion failed: {stderr}")
-    except FileNotFoundError:
-        raise RuntimeError("ffmpeg not found on PATH. Install ffmpeg and ffprobe.")
-
-
-def get_audio_duration(path):
-    try:
-        cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of",
-               "default=noprint_wrappers=1:nokey=1", path]
-        p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
-        out = p.stdout.decode().strip()
-        return float(out)
-    except FileNotFoundError:
-        app.logger.warning("ffprobe not found on PATH; cannot get duration")
-        return None
-    except Exception:
-        return None
-
+        cmd = (
+            f'ffmpeg -v error -ss {float(start)} -t {float(duration)} -i {shlex.quote(source_file)} '
+            '-af volumedetect -f null -'
+        )
+        p = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
+        stderr = p.stderr.decode('utf-8', errors='ignore')
+        m = re.search(r"mean_volume:\s*([-0-9\.]+)\s*dB", stderr)
+        if m:
+            return float(m.group(1))
+    except Exception as e:
+        print(f"[energy-check] failed: {e}")
+    return None
 
 def schedule_file_cleanup(file_paths, delay=CLEANUP_DELAY_SEC):
+    """
+    Schedules deletion of the given files after `delay` seconds.
+    """
     def cleanup_job(paths):
         for p in paths:
             try:
@@ -78,15 +90,22 @@ def schedule_file_cleanup(file_paths, delay=CLEANUP_DELAY_SEC):
     timer.daemon = True
     timer.start()
 
-
 def _extract_label_from_pipeline_output(raw_output):
+    """
+    Given the raw output from a HuggingFace text-classification pipeline (which can be
+    a dict, list-of-dicts, nested lists, etc.), return a single label string.
+    If extraction fails, return "neutral" as a safe fallback.
+    """
     try:
         if isinstance(raw_output, dict):
             return raw_output.get("label", "neutral")
+
         if isinstance(raw_output, (list, tuple)) and len(raw_output) > 0:
             first = raw_output[0]
             if isinstance(first, dict) and "label" in first:
                 return first["label"]
+            if isinstance(first, (list, tuple)) and len(first) > 0 and isinstance(first[0], dict) and "label" in first[0]:
+                return first[0]["label"]
             if isinstance(first, str):
                 return first
     except Exception:
@@ -94,155 +113,143 @@ def _extract_label_from_pipeline_output(raw_output):
     return "neutral"
 
 
-def load_models_if_needed():
-    global asr_pipeline, emotion_pipeline
-    if asr_pipeline is None:
-        try:
-            print(f"[models] Loading ASR pipeline: {ASR_MODEL_NAME} ...")
-            from transformers import pipeline as _pipeline
-            asr_pipeline = _pipeline("automatic-speech-recognition", model=ASR_MODEL_NAME, chunk_length_s=30)
-            print("[models] ASR pipeline loaded.")
-        except Exception as e:
-            print(f"[models] Failed to load ASR pipeline ({ASR_MODEL_NAME}): {e}")
-            asr_pipeline = None
-
-    if emotion_pipeline is None and EMOTION_MODEL_NAME:
-        try:
-            print(f"[models] Loading emotion classifier: {EMOTION_MODEL_NAME} ...")
-            from transformers import pipeline as _pipeline
-            emotion_pipeline = _pipeline("text-classification", model=EMOTION_MODEL_NAME, top_k=1, device=-1)
-            print("[models] Emotion pipeline loaded.")
-        except Exception as e:
-            print(f"[models] Failed to load emotion pipeline ({EMOTION_MODEL_NAME}): {e}")
-            emotion_pipeline = None
-
-
-def _parse_asr_output(raw, wav_path=None):
-    segments = []
+@app.route("/process_meeting", methods=["POST"])
+def process_meeting():
+    files = request.files.getlist("audio_files")
+    meeting_code = request.form.get("meeting_code", "UNKNOWN")
+    speaker_map_raw = request.form.get("speaker_map", "{}")
     try:
-        if isinstance(raw, dict) and 'text' in raw and not raw.get('chunks') and not raw.get('segments'):
-            dur = get_audio_duration(wav_path) or 0.0
-            segments.append({'start': 0.0, 'end': dur, 'text': raw['text']})
-            return segments
-
-        if isinstance(raw, dict) and 'chunks' in raw:
-            for c in raw['chunks']:
-                text = c.get('text') or c.get('chunk') or ''
-                start = c.get('timestamp', [0, 0])[0] if isinstance(c.get('timestamp'), (list, tuple)) else c.get('start', 0.0)
-                end = c.get('timestamp', [0, 0])[1] if isinstance(c.get('timestamp'), (list, tuple)) else c.get('end', start)
-                segments.append({'start': float(start), 'end': float(end), 'text': text.strip()})
-            return segments
-
-        if isinstance(raw, dict) and 'segments' in raw:
-            for s in raw['segments']:
-                segments.append({'start': float(s.get('start', 0.0)), 'end': float(s.get('end', 0.0)), 'text': (s.get('text') or '').strip()})
-            return segments
-
-        if isinstance(raw, (list, tuple)):
-            for part in raw:
-                if isinstance(part, dict) and 'text' in part:
-                    segments.append({'start': float(part.get('start', 0.0)), 'end': float(part.get('end', 0.0)), 'text': (part.get('text') or '').strip()})
-            if segments:
-                return segments
-
-    except Exception as e:
-        print(f"[asr-parse] failed: {e}")
-
-    try:
-        text = raw.get('text') if isinstance(raw, dict) else str(raw)
-        dur = get_audio_duration(wav_path) or 0.0
-        segments.append({'start': 0.0, 'end': dur, 'text': (text or '').strip()})
+        speaker_map = json.loads(speaker_map_raw)
     except Exception:
-        pass
+        speaker_map = {}
 
-    return segments
+    results = {}
+    created_file_paths = []
 
+    for f in files:
+        if f and allowed_file(f.filename):
+            filename = secure_filename(f.filename)
+            base_name = os.path.splitext(filename)[0]
+            save_path = os.path.join(UPLOAD_FOLDER, filename)
+            f.save(save_path)
+            created_file_paths.append(save_path)
 
-@app.after_request
-def add_cors_headers(response):
-    origin = ALLOWED_ORIGIN or "*"
-    response.headers.setdefault("Access-Control-Allow-Origin", origin)
-    response.headers.setdefault("Access-Control-Allow-Headers", "Content-Type,Authorization")
-    response.headers.setdefault("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
-    return response
+            wav_path = os.path.join(UPLOAD_FOLDER, f"{base_name}.wav")
+            try:
+                convert_to_wav(save_path, wav_path)
+                created_file_paths.append(wav_path)
+            except Exception as e:
+                print(f"ffmpeg convert failed for {save_path}: {e}. Using original file.")
+                wav_path = save_path
 
+            try:
+                asr_result = asr_model.transcribe(wav_path, language="en")
+            except Exception as e:
+                print(f"Whisper failed for {wav_path}: {e}")
+                asr_result = {"segments": []}
 
-@app.route("/", methods=["GET", "HEAD"])
-@app.route("/health", methods=["GET", "HEAD"])
-def health_check():
-    return jsonify({"status": "ok"}), 200
+            segs_with_emo = []
+            for seg in asr_result.get("segments", []):
+                text = (seg.get("text") or "").strip()
+                if not text or len(text) < MIN_TEXT_CHARS:
+                    continue
 
+                try:
+                    raw_emo = emotion_pipeline(text, top_k=1)
+                    emo_label = _extract_label_from_pipeline_output(raw_emo)
+                except Exception as e:
+                    print(f"[emotion] pipeline failed for text segment: {e}")
+                    emo_label = "neutral"
 
-@app.errorhandler(Exception)
-def handle_all_exceptions(e):
-    if isinstance(e, HTTPException):
-        return jsonify({"success": False, "error": e.description}), e.code
+                segs_with_emo.append({
+                    "start": seg.get("start", 0.0),
+                    "end": seg.get("end", 0.0),
+                    "text": text,
+                    "emotion": emo_label,
+                })
 
-    app.logger.exception("Unhandled exception during request")
-    tb = traceback.format_exc()
-    body = {"success": False, "error": str(e), "traceback": tb}
-    resp = make_response(jsonify(body), 500)
-    origin = ALLOWED_ORIGIN or "*"
-    resp.headers["Access-Control-Allow-Origin"] = origin
-    resp.headers["Access-Control-Allow-Headers"] = "Content-Type,Authorization"
-    resp.headers["Access-Control-Allow-Methods"] = "GET,POST,OPTIONS"
-    return resp
+            results[base_name] = {
+                "speaker": speaker_map.get(base_name, base_name),
+                "segments": segs_with_emo
+            }
 
+    merged_entries = []
+    for file_id, info in results.items():
+        for seg in info["segments"]:
+            merged_entries.append({
+                "start": seg["start"],
+                "end": seg["end"],
+                "speaker": info["speaker"],
+                "text": seg["text"],
+                "emotion": seg["emotion"]
+            })
+    merged_entries.sort(key=lambda x: x["start"])
 
-@app.route("/process_meeting", methods=["OPTIONS"])
-def process_meeting_options():
-    resp = Response()
-    origin = ALLOWED_ORIGIN or "*"
-    resp.headers["Access-Control-Allow-Origin"] = origin
-    resp.headers["Access-Control-Allow-Methods"] = "POST,OPTIONS"
-    resp.headers["Access-Control-Allow-Headers"] = "Content-Type,Authorization"
-    return resp
+    groups = []
+    current = None
+    for e in merged_entries:
+        if current and e["speaker"] == current["speaker"] and e["start"] - current["end"] <= 1.0:
+            current["end"] = e["end"]
+            current["texts"].append(e["text"])
+            current["emotions"].append(e["emotion"])
+        else:
+            if current:
+                groups.append(current)
+            current = {
+                "start": e["start"],
+                "end": e["end"],
+                "speaker": e["speaker"],
+                "texts": [e["text"]],
+                "emotions": [e["emotion"]],
+            }
+    if current:
+        groups.append(current)
 
+    lines = []
+    for g in groups:
+        lines.append(f"[{g['start']:.2f}–{g['end']:.2f}] {g['speaker']}:")
+        for t in g["texts"]:
+            lines.append(f"    {t}")
+        lines.append("")
 
-@app.route("/debug_upload", methods=["POST"])
-def debug_upload():
-    f = request.files.get("audio_files")
-    if not f:
-        return jsonify({"success": False, "error": "no audio_files uploaded"}), 400
+    speaker_summary = {}
+    for g in groups:
+        cnt = Counter(g["emotions"])
+        top, _ = cnt.most_common(1)[0]
+        breakdown = ", ".join([f"{k} ({v})" for k, v in cnt.items()])
+        speaker_summary[g["speaker"]] = f"top={top} — {breakdown}"
 
-    filename = secure_filename(f.filename)
-    save_path = os.path.join(UPLOAD_FOLDER, filename)
-    try:
-        f.save(save_path)
-    except Exception as e:
-        app.logger.exception("Failed to save uploaded file")
-        return jsonify({"success": False, "error": "save failed", "detail": str(e)}), 500
+    lines.append("=== Emotion Summary (by speaker) ===")
+    for sp, summary in speaker_summary.items():
+        lines.append(f"{sp}: {summary}")
 
-    # Handle conversion only if not already WAV
-    ext = filename.rsplit(".", 1)[-1].lower()
-    if ext == "wav":
-        wav_path = save_path
-    else:
-        base_name = os.path.splitext(filename)[0]
-        wav_path = os.path.join(UPLOAD_FOLDER, f"{base_name}.wav")
-        try:
-            convert_to_wav(save_path, wav_path)
-        except Exception as e:
-            app.logger.exception("ffmpeg conversion failed")
-            return jsonify({"success": False, "error": "ffmpeg failed", "detail": str(e)}), 500
+    transcript_text = "\n".join(lines)
 
-    dur = get_audio_duration(wav_path)
+    txt_filename = f"{meeting_code}_{uuid.uuid4().hex}.txt"
+    txt_path = os.path.join(OUTPUT_FOLDER, txt_filename)
+    with open(txt_path, "w", encoding="utf-8") as wf:
+        wf.write(transcript_text)
+    created_file_paths.append(txt_path)
+
+    json_filename = f"{meeting_code}_{uuid.uuid4().hex}.json"
+    json_path = os.path.join(OUTPUT_FOLDER, json_filename)
+    with open(json_path, "w", encoding="utf-8") as jf:
+        json.dump({"groups": groups, "speaker_summary": speaker_summary}, jf, indent=2)
+    created_file_paths.append(json_path)
+
+    schedule_file_cleanup(created_file_paths, delay=CLEANUP_DELAY_SEC)
+
     return jsonify({
         "success": True,
-        "saved": save_path,
-        "wav": wav_path,
-        "duration": dur
+        "transcript_text": transcript_text,
+        "txt_filename": txt_filename,
+        "json_filename": json_filename,
+        "files_will_be_deleted_in_sec": CLEANUP_DELAY_SEC
     }), 200
-
-
-# (process_meeting and other routes remain unchanged)
-
 
 @app.route("/outputs/<path:filename>", methods=["GET"])
 def download_output(filename):
     return send_from_directory(OUTPUT_FOLDER, filename, as_attachment=True)
 
-
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5001))
-    app.run(host="0.0.0.0", port=port, debug=False)
+    app.run(host="0.0.0.0", port=5001, debug=True)
