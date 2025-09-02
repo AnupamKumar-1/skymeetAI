@@ -198,23 +198,6 @@ Design principles: keep payloads small, idempotent where possible, and explicit 
 
 ---
 
-## Deployment & CI/CD (recommended)
-
-**CI**
-- Lint, unit tests, and contract tests for all services.
-- Integration test that spins a minimal stack via `docker-compose` (frontend, signalling, backend, ai_service mock).
-
-**CD**
-- Blue/green or canary deployments in k8s (Argo Rollouts or similar).
-- Model deployments for emotion/ASR are separate artifacts; tag with semantic versions and model hash.
-
-**K8s recommendations**
-- Readiness/liveness probes for all containers.
-- Resource requests/limits per container (based on profiled CPU/GPU usage).
-- Horizontal Pod Autoscaler based on custom metrics (open socket count, queue length).
-
----
-
 ## Developer quickstart & local dev matrix
 
 **Local matrix (fast path)**
