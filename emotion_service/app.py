@@ -181,7 +181,10 @@ def _convert_video_to_mp4(input_path):
     if input_path.lower().endswith(".mp4"):
         return input_path
 
-    ffmpeg_path = shutil.which("ffmpeg")
+    # ffmpeg_path = shutil.which("ffmpeg")
+    import imageio_ffmpeg
+    ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
+
     if not ffmpeg_path:
         logger.warning("ffmpeg not found on PATH; skipping video conversion for %s", input_path)
         return input_path
