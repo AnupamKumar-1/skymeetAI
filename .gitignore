@@ -9,6 +9,7 @@ env/
 # -------------------------
 # App-generated outputs
 # -------------------------
+
 uploads/
 outputs/
 data/
