@@ -30,3 +30,5 @@ gunicorn
 torchvision
 torchaudio
 h5py
+imageio-ffmpeg
+ffmpeg-python
