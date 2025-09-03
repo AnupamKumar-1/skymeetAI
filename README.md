@@ -2,7 +2,9 @@
 
 ## Project Overview
 
-SkymeetAI is a comprehensive real-time meeting and collaboration platform that integrates video conferencing, chat, participant tracking, automatic speech recognition (ASR), emotion analysis, and anomaly detection. The system supports multi-user video calls with WebRTC, real-time signaling via Socket.io, transcript generation, and AI-driven insights into participant emotions using both text-based and multimodal (audio-visual) models.
+SkymeetAI is an intelligent, all-in-one platform for real-time meetings and collaboration. It seamlessly integrates video conferencing, live chat, participant tracking, automatic speech recognition (ASR), emotion analysis, and anomaly detection into a single powerful system.
+Built on WebRTC for smooth multi-user video calls and Socket.io for real-time signaling, SkymeetAI ensures effortless connectivity and communication. Every conversation is enriched with AI-generated transcripts and deep participant insights, powered by advanced text-based and multimodal (audio-visual) models.
+With its ability to not only connect people but also understand them—through emotion recognition and intelligent anomaly detection—SkymeetAI transforms meetings into smarter, more human-centered experiences.
 
 The platform is composed of four main components:
 - **Frontend**: A React-based single-page application (SPA) for the user interface, handling video meetings, authentication, and interactions.
