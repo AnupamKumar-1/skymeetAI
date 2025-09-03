@@ -369,12 +369,8 @@ body {
 
 /* Floating placement for the top-right button */
 .history-float {
-    position: fixed;
-    top: 20px;
-    right: 20px;
     z-index: 1001;
-    /* above cards */
-    display: inline-flex;
+        display: inline-flex;
 }
 
 /* Hover/focus states */

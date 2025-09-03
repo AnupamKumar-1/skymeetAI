@@ -1,8 +1,9 @@
-let IS_PROD = false;
-const server = IS_PROD ?
-    "https://skymeetai-backend.onrender.com" :
+export const IS_PROD = false;
 
-    "http://localhost:8000"
+export const SERVER = IS_PROD
+  ? "https://skymeetai-backend.onrender.com"
+  : "http://localhost:8000";
 
+export const TRANSCRIPTS_ENABLED = !IS_PROD;
 
-export default server;
+export default SERVER;

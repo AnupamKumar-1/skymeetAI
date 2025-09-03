@@ -1,4 +1,4 @@
- // backend/src/controllers/user.controller.js
+// backend/src/controllers/user.controller.js
 import httpStatus from "http-status";
 import { User } from "../models/user.model.js";
 import bcrypt from "bcrypt";
@@ -17,6 +17,56 @@ const sendError = (res, status, message) =>
 const getUserId = (user) => {
   if (!user) return null;
   return user._id || user.id || user.sub || (typeof user === "string" ? user : null);
+};
+
+/**
+ * POST /auth/logout
+ *
+ * Clears the refresh cookie (httpOnly). If you store refresh tokens
+ * server-side (in the DB), invalidate/remove that token here.
+ *
+ * Notes:
+ * - Ensure you have cookie-parser enabled in your app (app.use(cookieParser()))
+ * - Ensure CORS allows credentials and frontend calls fetch(..., { credentials: "include" })
+ */
+const logout = async (req, res) => {
+  try {
+    // Optional: read refresh token from cookies (if you set it that way)
+    const refreshToken = req.cookies ? req.cookies.refreshToken : null;
+
+    // If you manage refresh tokens server-side (DB) and want to invalidate them,
+    // you can do it here. Example (pseudo):
+    // if (refreshToken) { await RefreshTokenModel.invalidate(refreshToken); }
+    //
+    // Or, if you stored a refreshToken on the user record:
+    // if (req.user && req.user._id) { await User.updateOne({ _id: req.user._id }, { $unset: { refreshToken: "" } }); }
+
+    // Clear the cookie that holds the refresh token.
+    res.clearCookie("refreshToken", {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "Strict",
+      path: "/", // match the path that was used when setting the cookie
+    });
+
+    return res.status(httpStatus.OK).json({ success: true, message: "Logged out" });
+  } catch (err) {
+    console.error("logout error:", err.stack || err);
+
+    // Try to clear cookie even on error
+    try {
+      res.clearCookie("refreshToken", {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "Strict",
+        path: "/",
+      });
+    } catch (e) {
+      // ignore
+    }
+
+    return sendError(res, httpStatus.INTERNAL_SERVER_ERROR, "Failed to logout");
+  }
 };
 
 /**
@@ -338,4 +388,5 @@ export {
   addParticipant,
   getMeetings,
   upsertMeeting,
+  logout, // <-- exported
 };

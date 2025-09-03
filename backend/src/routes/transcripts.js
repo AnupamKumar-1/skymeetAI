@@ -13,7 +13,6 @@ function pickHandler(...names) {
 
 const available = Object.keys(ctrl || {});
 
-// try several common names so route works even if controller uses a different name
 const createHandler =
   pickHandler(
     "createTranscript",
@@ -62,7 +61,6 @@ const getHandler =
           available.join(", "),
       }));
 
-// helpful console log for debugging import/export mismatches
 if (available.length === 0) {
   console.warn(
     "[transcripts route] controller exported nothing (empty). Check ../controllers/transcript.controller.js"

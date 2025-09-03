@@ -4,6 +4,8 @@ import { useParams, useNavigate } from "react-router-dom";
 import { AuthContext } from "../contexts/AuthContext";
 import io from "socket.io-client";
 import styles from "../styles/videoComponent.module.css";
+import { TRANSCRIPTS_ENABLED } from "../environment";
+
 import {
   FaMicrophone,
   FaMicrophoneSlash,
@@ -35,12 +37,23 @@ const SOCKET_SERVER_URL =
   process.env.REACT_APP_SIGNALING_URL || "http://localhost:8000";
 
 // Transcript (AI) service — default: http://localhost:5001/process_meeting
+// const TRANSCRIPT_ENDPOINT = (() => {
+//   const env = process.env.REACT_APP_TRANSCRIPT_URL || process.env.REACT_APP_AI_URL;
+//   if (!env) return "http://localhost:5001/process_meeting";
+//   const trimmed = env.replace(/\/+$/, "");
+//   return trimmed.endsWith("/process_meeting") ? trimmed : `${trimmed}/process_meeting`;
+// })();
+
 const TRANSCRIPT_ENDPOINT = (() => {
+  // If transcripts are disabled in this build, return null so no network calls are made.
+  if (!TRANSCRIPTS_ENABLED) return null;
+
   const env = process.env.REACT_APP_TRANSCRIPT_URL || process.env.REACT_APP_AI_URL;
   if (!env) return "http://localhost:5001/process_meeting";
   const trimmed = env.replace(/\/+$/, "");
   return trimmed.endsWith("/process_meeting") ? trimmed : `${trimmed}/process_meeting`;
 })();
+
 
 const EMOTION_ENDPOINT = (() => {
   const env = process.env.REACT_APP_EMOTION_URL;
@@ -81,7 +94,7 @@ const [chatMessages, setChatMessages] = useState([]);
 const seenMsgIdsRef = useRef(new Set());
   const [participantsMeta, setParticipantsMeta] = useState([]);
   const [myId, setMyId] = useState(null);
-const { userData } = useContext(AuthContext);
+const { userData, addToUserHistory } = useContext(AuthContext);
 
   const recordersRef = useRef({});
 
@@ -90,7 +103,6 @@ useEffect(() => { mutedRef.current = muted; }, [muted]);
 
 const videoOffRef = useRef(videoOff);
 useEffect(() => { videoOffRef.current = videoOff; }, [videoOff]);
-
 
   // Active speaker detection
   const [activeSpeakerId, setActiveSpeakerId] = useState(null);
@@ -122,11 +134,51 @@ useEffect(() => { videoOffRef.current = videoOff; }, [videoOff]);
     localStorage.setItem("displayName", name);
     start();
 
-    const onBeforeUnload = () => {
+    const onBeforeUnload = (ev) => {
+  try {
+    if (isHost) {
+      // Build a small, synchronous snapshot to save immediately in case the page unloads
       try {
-        socketRef.current?.emit("leave-call", roomId);
-      } catch {}
-    };
+        const snapshot = {
+          meetingCode: (roomId || '').toString().trim().toUpperCase(),
+          hostName: localStorage.getItem('displayName') || 'Host',
+          participants: (participantsMeta || []).map(p => p?.meta?.name || p?.meta?.displayName || p?.meta?.username || p?.id || 'Guest'),
+          createdAt: new Date().toISOString(),
+          link: `${window.location.origin}/room/${(roomId || '').toString().trim().toUpperCase()}`
+        };
+
+        // prepend to local fallback array (cap to 100 entries)
+        try {
+          const key = 'meeting_history_v1';
+          const raw = localStorage.getItem(key);
+          const arr = raw ? JSON.parse(raw) : [];
+          arr.unshift(snapshot);
+          localStorage.setItem(key, JSON.stringify(arr.slice(0, 100)));
+        } catch (localErr) {
+          console.warn('onBeforeUnload: could not write local fallback', localErr);
+        }
+      } catch (err) {
+        console.warn('onBeforeUnload: snapshot build failed', err);
+      }
+      try {
+        persistHistorySnapshot(); // fire-and-forget
+      } catch (e) {
+        console.warn('onBeforeUnload: persistHistorySnapshot threw', e);
+      }
+    }
+
+    // Tell the server we're leaving — best-effort emit.
+    try {
+      socketRef.current?.emit('leave-call', roomId);
+    } catch (emitErr) {
+      console.warn('onBeforeUnload: socket emit failed', emitErr);
+    }
+  } catch (e) {
+    // swallow errors to avoid interfering with unload
+    console.warn('onBeforeUnload: unexpected error', e);
+  }
+};
+
     window.addEventListener("beforeunload", onBeforeUnload);
 
     return () => {
@@ -318,6 +370,27 @@ useEffect(() => { videoOffRef.current = videoOff; }, [videoOff]);
     }
   }
 
+  async function persistHistorySnapshot() {
+  if (!isHost || typeof addToUserHistory !== 'function') return;
+  try {
+    const participantList = (participantsMeta || []).map(p => {
+      return p?.meta?.name || p?.meta?.displayName || p?.meta?.username || p?.id || 'Guest';
+    });
+    await addToUserHistory({
+      meetingCode: (roomId || '').toUpperCase(),
+      hostName: localStorage.getItem('displayName') || 'Host',
+      participants: participantList,
+      createdAt: new Date().toISOString(),
+      link: `${window.location.origin}/room/${(roomId || '').toUpperCase()}`
+    });
+    console.log('[history] persisted meeting snapshot');
+  } catch (err) {
+    console.warn('[history] persist failed', err);
+  }
+}
+
+
+
   function computeRMS(float32Array) {
     let sum = 0;
     for (let i = 0; i < float32Array.length; i++) {
@@ -457,10 +530,40 @@ useEffect(() => { videoOffRef.current = videoOff; }, [videoOff]);
     });
   }
 
-  async function uploadRecordingsAndStoreTranscript() {
-  if (!isHost) return null;
+  // Helper: read host secret from localStorage for a given room code
+function getHostSecretForRoom(roomCode) {
+  if (!roomCode) return null;
   try {
+    const raw = localStorage.getItem(`host:${String(roomCode).toUpperCase()}`);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return parsed?.hostSecret || null;
+  } catch (e) {
+    console.warn("Failed to read host secret from localStorage", e);
+    return null;
+  }
+}
 
+async function uploadRecordingsAndStoreTranscript() {
+  if (!isHost) return null;
+
+  // If transcripts are globally disabled for this build, stop any recorders and skip upload/persist.
+  if (!TRANSCRIPTS_ENABLED) {
+    console.warn("[transcript] Transcript service disabled via TRANSCRIPTS_ENABLED; skipping upload/persist.");
+    try { stopAllRecorders(); } catch (e) { console.warn("stopAllRecorders failed", e); }
+    recordersRef.current = {};
+    return null;
+  }
+
+  // Ensure we actually have an endpoint to call (TRANSCRIPT_ENDPOINT is expected to be null when disabled)
+  if (!TRANSCRIPT_ENDPOINT) {
+    console.warn("[transcript] No TRANSCRIPT_ENDPOINT configured; skipping upload/persist.");
+    try { stopAllRecorders(); } catch (e) { console.warn("stopAllRecorders failed", e); }
+    recordersRef.current = {};
+    return null;
+  }
+
+  try {
     stopAllRecorders();
     await new Promise((r) => setTimeout(r, 1200));
 
@@ -473,11 +576,10 @@ useEffect(() => { videoOffRef.current = videoOff; }, [videoOff]);
         const display =
           p?.meta?.name ||
           p?.meta?.displayName ||
-          `Guest-${p.id.slice(0, 6)}`;
+          `Guest-${(p.id || "").slice ? p.id.slice(0, 6) : p.id}`;
         speakerMap[p.id] = display;
       });
-      speakerMap["local"] =
-        localStorage.getItem("displayName") || "Host";
+      speakerMap["local"] = localStorage.getItem("displayName") || "Host";
     } catch (e) {
       console.warn("speaker map build failed", e);
     }
@@ -485,9 +587,7 @@ useEffect(() => { videoOffRef.current = videoOff; }, [videoOff]);
 
     // attach audio files
     let fileCount = 0;
-    for (const [id, { chunks }] of Object.entries(
-      recordersRef.current || {}
-    )) {
+    for (const [id, { chunks }] of Object.entries(recordersRef.current || {})) {
       if (!chunks || chunks.length === 0) continue;
       const blob = new Blob(chunks, { type: "audio/webm" });
       fd.append("audio_files", blob, `${id}.webm`);
@@ -495,9 +595,7 @@ useEffect(() => { videoOffRef.current = videoOff; }, [videoOff]);
     }
 
     if (fileCount === 0) {
-      console.warn(
-        "[transcript] No audio files recorded — skipping transcript upload"
-      );
+      console.warn("[transcript] No audio files recorded — skipping transcript upload");
       return null;
     }
 
@@ -508,36 +606,48 @@ useEffect(() => { videoOffRef.current = videoOff; }, [videoOff]);
     });
 
     if (!resp.ok) {
-      console.error(
-        "upload recordings failed",
-        await resp.text()
-      );
+      console.error("upload recordings failed", await resp.text());
       return null;
     }
 
     const data = await resp.json();
-    if (data?.success) {
-      const payload = {
-        meeting_code: (roomId || "").toUpperCase(),
-        transcript: data.transcript_text || "",
-        createdAt: new Date().toISOString(),
-        txt_filename: data.txt_filename,
-        // build download URL from TRANSCRIPT_ENDPOINT base
-        downloadUrlFlask: `${TRANSCRIPT_ENDPOINT.replace(
-          "/process_meeting",
-          ""
-        ).replace(/\/$/, "")}/outputs/${data.txt_filename}`,
-      };
+    if (!data?.success) {
+      console.warn("AI service returned no success:", data);
+      return null;
+    }
 
-      // guard: skip Node persist if transcript missing/empty
-      if (!payload.transcript || payload.transcript.trim() === "") {
-        console.warn(
-          "[transcript] Transcript missing/empty, skipping Node persistence"
+    // Build payload fields (keep local storage shape for local download; map to backend shape below)
+    const payload = {
+      meeting_code: (roomId || "").toUpperCase(),
+      transcript: data.transcript_text || "",
+      createdAt: new Date().toISOString(),
+      txt_filename: data.txt_filename,
+      // safe construction of Flask download URL (TRANSCRIPT_ENDPOINT guaranteed non-null here)
+      downloadUrlFlask: `${TRANSCRIPT_ENDPOINT.replace("/process_meeting", "").replace(/\/$/, "")}/outputs/${data.txt_filename}`,
+    };
+
+    // guard: skip Node persist if transcript missing/empty
+    if (!payload.transcript || payload.transcript.trim() === "") {
+      console.warn("[transcript] Transcript missing/empty, skipping Node persistence");
+      // still save locally for device
+      try {
+        localStorage.setItem(
+          `transcript:${payload.meeting_code}`,
+          JSON.stringify({
+            meeting_code: payload.meeting_code,
+            transcript: payload.transcript,
+            createdAt: payload.createdAt,
+            downloadUrlFlask: payload.downloadUrlFlask,
+          })
         );
-        return data;
+      } catch (e) {
+        console.warn("localStorage set failed:", e);
       }
+      return data;
+    }
 
-      // save in localStorage
+    // save in localStorage (device fallback)
+    try {
       localStorage.setItem(
         `transcript:${payload.meeting_code}`,
         JSON.stringify({
@@ -547,43 +657,63 @@ useEffect(() => { videoOffRef.current = videoOff; }, [videoOff]);
           downloadUrlFlask: payload.downloadUrlFlask,
         })
       );
+    } catch (e) {
+      console.warn("localStorage set failed:", e);
+    }
 
-      // persist to Node backend
-      try {
+    // persist to Node backend (accept either x-host-secret OR Authorization Bearer token)
+    try {
+      const hostSecret = getHostSecretForRoom(payload.meeting_code);
+      const token = localStorage.getItem("token");
+
+      // Build headers
+      const headers = { "Content-Type": "application/json" };
+      if (hostSecret) headers["x-host-secret"] = hostSecret;
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+
+      // IMPORTANT: use the backend's expected field names
+      const backendBody = {
+        meetingCode: payload.meeting_code,
+        transcriptText: payload.transcript,
+        fileName: payload.txt_filename || null,
+        metadata: {
+          downloadUrlFlask: payload.downloadUrlFlask,
+          createdByClientAt: payload.createdAt,
+        },
+      };
+
+      // If neither hostSecret nor token present, skip backend persist (to avoid 403)
+      if (!hostSecret && !token) {
+        console.warn("[transcript] no hostSecret or token available; skipping backend persist");
+      } else {
         const backendResp = await fetch(`${API_BASE}/transcript`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            meetingCode: payload.meeting_code,
-            transcriptText: payload.transcript,
-            fileName: payload.txt_filename,
-          }),
+          headers,
+          body: JSON.stringify(backendBody),
         });
+
         if (!backendResp.ok) {
-          console.warn(
-            "persist transcript to node failed",
-            await backendResp.text()
-          );
+          const txt = await backendResp.text().catch(() => "<no-body>");
+          console.warn("persist transcript to node failed", backendResp.status, txt);
         } else {
-          const backendData = await backendResp.json();
+          const backendData = await backendResp.json().catch(() => null);
           console.log("Persisted transcript to backend:", backendData);
         }
-      } catch (err) {
-        console.warn("Persist transcript network error:", err);
       }
-
-      return data;
-    } else {
-      console.warn("AI service returned no success:", data);
-      return null;
+    } catch (err) {
+      console.warn("Persist transcript network error:", err);
     }
+
+    return data;
   } catch (err) {
     console.error("uploadRecordingsAndStoreTranscript err:", err);
     return null;
   } finally {
+    // clear recorder state regardless
     recordersRef.current = {};
   }
 }
+
 
 
   const EMO_CONFIG = {
@@ -1170,6 +1300,7 @@ useEffect(() => { videoOffRef.current = videoOff; }, [videoOff]);
     });
 
     socket.on("end-meeting", async () => {
+      try { await persistHistorySnapshot(); } catch(e) {}
   cleanupAll();
   navigate("/home")
 
@@ -1221,85 +1352,6 @@ const emotionHandler = (payload) => {
       socket.off("emotion", emotionHandler);
     });
   }
-
-
-// function startInboundVideoMonitor(peerId, pc) {
-//   const CHECK_INTERVAL = 1000; // ms
-//   const STALL_THRESHOLD = 3000; // ms of no new frames -> consider stalled
-//   const lastFrameInfo = new Map(); // key: trackId -> { frames, ts }
-//   // save interval id on pc so we can clear it
-//   pc._statsInterval = setInterval(async () => {
-//     try {
-//       const receivers = pc.getReceivers ? pc.getReceivers() : [];
-//       for (const r of receivers) {
-//         if (!r.track || r.track.kind !== "video") continue;
-
-//         // Try receiver.getStats first (works in modern browsers). Fallback to pc.getStats(r.track)
-//         let stats = null;
-//         try {
-//           if (typeof r.getStats === "function") stats = await r.getStats();
-//           else if (typeof pc.getStats === "function") stats = await pc.getStats(r.track);
-//         } catch (e) {
-//           // ignore stats failures
-//           stats = null;
-//         }
-
-//         if (!stats) continue;
-
-//         // extract frames counter from inbound-rtp report
-//         let frames = null;
-//         stats.forEach((report) => {
-//           if (report && report.type && report.type.toLowerCase().includes("inbound-rtp")) {
-//             // prefer framesDecoded, fallback to framesReceived
-//             frames = report.framesDecoded ?? report.framesReceived ?? report.packetsReceived ?? frames;
-//           }
-//         });
-
-//         if (frames == null) {
-//           // couldn't read frames; skip
-//           continue;
-//         }
-
-//         const prev = lastFrameInfo.get(r.track.id) || { frames, ts: Date.now() };
-//         if (frames > prev.frames) {
-//           // frames advanced — mark as healthy and store timestamp
-//           lastFrameInfo.set(r.track.id, { frames, ts: Date.now() });
-
-//           // If we previously replaced with empty stream because of stall, restore real stream
-//           // pc._remoteStream should hold the current real stream (or we replaced it previously)
-//           const currentStream = pc._remoteStream;
-//           if (currentStream && currentStream.getVideoTracks().length > 0) {
-//             // ensure app state has the real stream object (restore)
-//             setRemoteStreams((s) => {
-//               if (s && s[peerId] === currentStream) return s; // already set
-//               return { ...s, [peerId]: currentStream };
-//             });
-//           }
-//         } else {
-//           // frames did NOT increase
-//           const elapsed = Date.now() - prev.ts;
-//           if (elapsed > STALL_THRESHOLD) {
-//             // treat as stalled: replace app-level stream object with an *empty* MediaStream
-//             // so ParticipantCard's ref effect will clear el.srcObject and stop the frozen frame
-//             setRemoteStreams((s) => {
-//               const cur = s && s[peerId];
-//               // if already empty, skip
-//               if (cur && cur.getTracks && cur.getTracks().length === 0) return s;
-//               const empty = new MediaStream();
-//               return { ...s, [peerId]: empty };
-//             });
-//             // keep prev record timestamp so we don't spam creating empty stream repeatedly
-//             lastFrameInfo.set(r.track.id, { frames: prev.frames, ts: prev.ts });
-//           }
-//         }
-//       }
-//     } catch (err) {
-//       // swallow errors so monitor keeps running
-//       // console.debug("stats monitor error", err);
-//     }
-//   }, CHECK_INTERVAL);
-// }
-
 
 function createPeerConnection(peerId) {
   if (pcsRef.current[peerId]) return pcsRef.current[peerId];
@@ -1813,23 +1865,43 @@ async function negotiateCreateOffer(peerId) {
 
     if (newMuted) {
       // 🔇 Muting host mic
-      try { window.stopTranscription?.(); } catch {}
+      if (TRANSCRIPTS_ENABLED) {
+        try { window.stopTranscription?.(); } catch (e) { console.warn("stopTranscription failed", e); }
+      } else {
+        // transcripts disabled — no-op for transcription
+        console.debug("transcription disabled; skip stopTranscription");
+      }
+
       try {
         const rec = recordersRef.current?.["local"];
         if (rec?.recorder && rec.recorder.state !== "inactive") rec.recorder.stop();
         if (recordersRef.current) delete recordersRef.current["local"];
-      } catch {}
-      setActiveSpeakerId(prev => (prev === "local" ? null : prev));
+      } catch (e) {
+        console.warn("stopping local recorder failed", e);
+      }
+
+      setActiveSpeakerId((prev) => (prev === "local" ? null : prev));
     } else {
       // 🔊 Unmuting host mic
-      try { window.startTranscription?.(localStreamRef.current); } catch {}
-      try { window.startRecording?.("audio", localStreamRef.current); } catch {}
+      if (TRANSCRIPTS_ENABLED) {
+        try { window.startTranscription?.(localStreamRef.current); } catch (e) { console.warn("startTranscription failed", e); }
+      } else {
+        // transcripts disabled — still start local recording if desired
+        console.debug("transcription disabled; skip startTranscription");
+      }
+
+      try {
+        window.startRecording?.("audio", localStreamRef.current);
+      } catch (e) {
+        console.warn("startRecording failed", e);
+      }
     }
   } catch (err) {
     console.error("toggleMute error:", err);
     if (mutedRef) mutedRef.current = muted; // rollback
   }
 }
+
 
 async function toggleVideo() {
   const expectedNext = !videoOff;
@@ -2086,20 +2158,26 @@ async function leaveCall() {
   navigate("/home");
 }
 
-
-
-async function endMeeting() {
+  async function endMeeting() {
   try {
     if (isHost) {
-      // Host can still upload transcript if you want to keep that feature
-      try {
-        await uploadRecordingsAndStoreTranscript();
-      } catch (e) {
-        console.warn("uploadRecordingsAndStoreTranscript failed", e);
+      // Only attempt upload if transcripts are enabled for this build.
+      if (TRANSCRIPTS_ENABLED) {
+        try {
+          await uploadRecordingsAndStoreTranscript();
+        } catch (e) {
+          console.warn("uploadRecordingsAndStoreTranscript failed", e);
+        }
+      } else {
+        // transcripts disabled => ensure recorders are stopped & cleared, but skip network calls
+        console.debug("[transcript] skipping upload because TRANSCRIPTS_ENABLED is false.");
+        try { stopAllRecorders(); } catch (e) { console.warn("stopAllRecorders failed", e); }
+        try { recordersRef.current = {}; } catch (e) { /* best-effort clear */ }
       }
 
       if (socketRef.current?.connected) {
         socketRef.current.emit("end-meeting", roomId);
+        // give socket a tiny moment to emit
         await new Promise((r) => setTimeout(r, 50));
       }
     } else {
