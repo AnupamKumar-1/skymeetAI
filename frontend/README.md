@@ -1,4 +1,4 @@
-# SkyMeetAI - Frontend Documentation
+# SkymeetAI - Frontend Documentation
 
 This document provides a comprehensive overview of the frontend application for a video meeting platform. It details the key pages, technology stack, setup instructions, core components, and specific module documentation for `VideoMeet.jsx`, `AuthContext.jsx`, `mediaController.js`, and `home.jsx`. The application is built using React 18 and integrates WebRTC for peer-to-peer video/audio communication, Socket.io for real-time signaling, and Material-UI for the user interface.
 
