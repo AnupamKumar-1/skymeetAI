@@ -1,278 +1,307 @@
-# Project README
+# SkyMeetAI - Frontend Documentation
 
-> **VideoMeet Frontend** — A React-based in-browser meeting app with WebRTC, Socket.IO signalling, host-side recording & transcription, and optional emotion analysis.
-
----
-
-## Table of contents
-
-- [Project README](#project-readme)
-  - [Table of contents](#table-of-contents)
-  - [What this repo contains](#what-this-repo-contains)
-  - [Features](#features)
-  - [Prerequisites](#prerequisites)
-  - [Environment variables](#environment-variables)
-  - [Install \& run (development)](#install--run-development)
-  - [Build \& run (production)](#build--run-production)
-  - [Important routes \& components](#important-routes--components)
-    - [`VideoMeet` responsibilities (quick summary)](#videomeet-responsibilities-quick-summary)
-  - [Signalling / WebRTC flow](#signalling--webrtc-flow)
-  - [API contracts (expected request / response shapes)](#api-contracts-expected-request--response-shapes)
-    - [Transcript service (`REACT_APP_TRANSCRIPT_URL`)](#transcript-service-react_app_transcript_url)
-    - [Emotion analysis service (`REACT_APP_EMOTION_URL`)](#emotion-analysis-service-react_app_emotion_url)
-    - [Backend API (`REACT_APP_API_URL` / `REACT_APP_SERVER_URL`)](#backend-api-react_app_api_url--react_app_server_url)
-  - [Auth \& user state](#auth--user-state)
-  - [Media \& recordings](#media--recordings)
-  - [Troubleshooting \& FAQ](#troubleshooting--faq)
-  - [Runbook / Deployment checklist](#runbook--deployment-checklist)
-  - [License](#license)
+This document provides a comprehensive overview of the frontend application for a video meeting platform. It details the key pages, technology stack, setup instructions, core components, and specific module documentation for `VideoMeet.jsx`, `AuthContext.jsx`, `mediaController.js`, and `home.jsx`. The application is built using React 18 and integrates WebRTC for peer-to-peer video/audio communication, Socket.io for real-time signaling, and Material-UI for the user interface.
 
 ---
 
-## What this repo contains
+## Table of Contents
 
-This is the frontend application for the VideoMeet project (React). Key files/components you should know:
-
-- `src/components/VideoMeet.jsx` — Main meeting view: local media capture, Socket.IO signalling, per-peer `RTCPeerConnection`, active-speaker detection, recording uploads, and optional emotion capture.
-- `src/components/home.jsx` — Landing / dashboard: create room, copy link, join room, and show recent transcripts.
-- `src/contexts/AuthContext.jsx` — Authentication provider: login/register logic, axios clients, meeting history persistence, and helper functions used across the app.
-- `src/components/authentication.jsx` — MUI-based sign in / sign up UI.
-- `src/mediaController.js` — Media utility helpers (present in the repo and referenced by `VideoMeet`).
-
-> Note: file paths above are shown as examples. Adjust path prefixes to match where files are located in your repository.
-
----
-
-## Features
-
-- Camera & microphone capture via `getUserMedia`.
-- Socket.IO signalling server integration for room coordination.
-- One `RTCPeerConnection` per remote participant with stable offer/answer/ICE handling.
-- Host-side per-participant audio recording and upload for transcription.
-- Periodic short clip capture (host) for emotion analysis (multiple delivery fallbacks).
-- Active-speaker detection using WebAudio `AnalyserNode`.
-- Basic authentication flow (register / login) and persistence of tokens to `localStorage` via `AuthContext`.
+1. [Overview](#overview)
+2. [Key Pages](#key-pages)
+3. [Technology Stack & Dependencies](#technology-stack--dependencies)
+4. [Important Scripts](#important-scripts)
+5. [Environment & Runtime Configuration](#environment--runtime-configuration)
+6. [Developer Quick Start](#developer-quick-start)
+7. [Module Documentation](#module-documentation)
+   - [VideoMeet.jsx](#videomeetjsx)
+   - [AuthContext.jsx](#authcontextjsx)
+   - [mediaController.js](#mediacontrollerjs)
+   - [home.jsx](#homejsx)
+8. [Troubleshooting](#troubleshooting)
 
 ---
 
-## Prerequisites
+## Overview
 
-- Node.js (v16+ recommended)
-- npm or yarn
-- A signalling server (Socket.IO compatible) reachable from the frontend
-- A backend API to persist rooms, transcripts, and user data (optional for local-only testing)
-- (Optional) Transcript / Emotion analysis services if you want recordings to be analyzed
+The frontend application is a React-based single-page application (SPA) that provides a video conferencing platform with features like room creation, real-time video/audio streaming, chat, screen sharing, active speaker detection, and emotion analysis (host-only). It integrates with a backend API and Socket.io server for signaling and data persistence. The application is bootstrapped with Create React App and uses Material-UI for consistent, modern styling.
 
 ---
 
-## Environment variables
+## Key Pages
 
-Place these in a `.env` file at the project root (create if missing). The frontend reads variables with the `REACT_APP_` prefix.
+- **Landing (`/`)**: A marketing-focused entry page with navigation to other app sections.
+- **Authentication (`/auth`)**: Handles user sign-in and registration using Material-UI components.
+- **Home (`/home`)**: Allows users to create/join rooms, copy room links, and view recent transcripts.
+- **History (`/history`)**: Displays a list of past meetings for the authenticated user.
+- **Video Meeting (`/room/:roomId`)**: The core video call interface, leveraging Socket.io for signaling and WebRTC for peer-to-peer media streaming.
 
-```env
-REACT_APP_SIGNALING_URL=http://localhost:8000    # Socket.IO signaling server
-REACT_APP_API_URL=http://localhost:8000/api/v1  # Backend API base
-REACT_APP_SERVER_URL=http://localhost:8000      # Backend server (non-API root)
-REACT_APP_TRANSCRIPT_URL=http://localhost:5001/process_meeting  # Transcript service endpoint
-REACT_APP_EMOTION_URL=http://localhost:5002/analyze           # Emotion analysis endpoint
-REACT_APP_SUPPORTS_GLOBAL_MEETINGS=true  # If your backend exposes global /meetings endpoints
-```
-
-Defaults are used in many files when env vars are not provided. Adjust for production before building.
+Authentication and API interactions are managed centrally via `src/contexts/AuthContext.jsx`, which provides a context for user state and helper functions.
 
 ---
 
-## Install & run (development)
+## Technology Stack & Dependencies
 
-```bash
-# Install
-npm install
+- **Core Framework**: React 18 (via Create React App)
+- **Routing**: `react-router-dom`
+- **Real-time Signaling**: `socket.io-client`
+- **HTTP Client**: `axios`
+- **UI Components**: `@mui/material`, `@mui/icons-material`
+- **Animations**: `framer-motion`
+- **HTTP Status Helper**: `http-status`
 
-# Run dev server
-npm start
-```
-
-This starts the frontend on the default React port (typically `http://localhost:3000`). Ensure the signalling server and backend API are accessible from the browser.
-
----
-
-## Build & run (production)
-
-```bash
-npm run build
-# Serve the build directory with your preferred static host (nginx, surge, Netlify, etc.).
-```
-
-When deploying, set the `REACT_APP_*` environment variables at build time so the compiled bundle contains the correct endpoints.
+For a complete list, refer to `package.json`.
 
 ---
 
-## Important routes & components
+## Important Scripts
 
-- `/home` — Home dashboard (`home.jsx`) with room creation and transcript listing.
-- `/room/:roomId` — Meeting room (`VideoMeet.jsx`) where all call features are executed.
-- `/login` — Authentication page (component `authentication.jsx`) that consumes `AuthContext`.
+From `package.json`:
 
-
-### `VideoMeet` responsibilities (quick summary)
-
-- Acquire local media (`getUserMedia`).
-- Connect to Socket.IO signalling server and emit `join-call`.
-- Create and maintain `RTCPeerConnection` objects for remote participants.
-- Start/stop host recordings and upload audio chunks to the transcript service.
-- Run periodic short clip capture for emotion analysis (host-only by default).
-- Cleanup and leave-handling when the meeting ends.
+- **`start`**: `react-scripts start` - Launches the development server.
+- **`build`**: `react-scripts build` - Creates a production-optimized build.
+- **`test`**: `react-scripts test` - Runs tests.
+- **`eject`**: `react-scripts eject` - Ejects from Create React App for full configuration control.
 
 ---
 
-## Signalling / WebRTC flow
+## Environment & Runtime Configuration
 
-This project expects a Socket.IO-style signalling server. Typical events used by the frontend include (but are not limited to):
+The application uses `src/environment.js` to define the `server` constant, defaulting to `http://localhost:8000` when `IS_PROD` is `false`. Key environment variables include:
 
-- `join-call` — client emits on joining a room; payload typically `{ roomId, displayName, isHost }`.
-- `existing-participants` — server -> newly joined client: list of participant IDs already in the room.
-- `user-joined` / `user-left` — server broadcasts changes in participants.
-- `signal` — generic container for SDP offers/answers and ICE candidates: `{ to, from, type, data }`.
-- `chat-message`, `participant-meta-updated`, `end-meeting`, `emotion.frame` — optional application events used in the UI.
+- **`REACT_APP_SERVER_URL`**: Fallback server URL for some pages.
+- **`REACT_APP_API_URL`**: Base URL for API calls (e.g., rooms, meetings).
+- **`REACT_APP_SIGNALING_URL`**: Socket.io server URL (default: `http://localhost:8000`).
+- **`REACT_APP_TRANSCRIPT_URL` or `REACT_APP_AI_URL`**: Transcript service (default: `http://localhost:5001/process_meeting`).
+- **`REACT_APP_EMOTION_URL`**: Emotion analysis service (default: `http://localhost:5002/analyze`).
+- **`REACT_APP_SUPPORTS_GLOBAL_MEETINGS`**: Boolean (default: `true`) for global `/meetings` endpoint.
 
-Adapt your signalling server to accept and relay these events. The frontend creates an offer per new remote participant and exchanges SDP/ICE via `signal` events.
-
----
-
-## API contracts (expected request / response shapes)
-
-Below are example minimal contracts inferred from the frontend code so backend/AI services can be implemented. These are intentionally light — adapt as needed.
-
-### Transcript service (`REACT_APP_TRANSCRIPT_URL`)
-
-**Endpoint (example)**
-```
-POST /process_meeting
-Content-Type: multipart/form-data
-```
-
-**Form fields**
-- `file` — audio file (webm/ogg/wav) or `Blob` chunk recorded by `MediaRecorder`.
-- `roomCode` — string; meeting room code.
-- `participantId` or `participantName` — who the recording belongs to.
-- `startTime` / `endTime` — optional ISO timestamps.
-
-**Response (example)**
-```json
-{
-  "success": true,
-  "transcript": "... full transcript text ...",
-  "segments": [
-    {"start": "2025-09-03T10:00:00Z", "end": "2025-09-03T10:00:05Z", "text": "Hi everyone"}
-  ]
-}
-```
-
-> Note: The frontend expects a JSON response containing at least a transcript string. If the transcript service returns chunks/segments, the frontend may send those to the backend API for persistence.
+To configure for a remote backend:
+- Set `IS_PROD = true` in `src/environment.js`, or
+- Provide `REACT_APP_API_URL` / `REACT_APP_SERVER_URL` during build.
 
 ---
 
-### Emotion analysis service (`REACT_APP_EMOTION_URL`)
+## Developer Quick Start
 
-The frontend uses multiple fallbacks to deliver short clips (binary via socket, base64 payload via socket, or REST multipart). Support any one of these.
+1. **Install Dependencies**:
+   ```bash
+   cd frontend
+   npm install
+   ```
 
-**Endpoint (example)**
-```
-POST /analyze
-Content-Type: multipart/form-data
-```
+2. **Start Development Server**:
+   ```bash
+   npm start
+   ```
 
-**Form fields**
-- `clip` — short video/audio clip (webm) or single-frame image
-- `participantId` — string
-- `roomId` — string
+3. **Access the App**:
+   - Open `http://localhost:3000`.
+   - Ensure the backend (API + Socket.io) is running at the configured URL (default: `http://localhost:8000`).
 
-**Response (example)**
-```json
-{
-  "success": true,
-  "emotions": { "happy": 0.72, "neutral": 0.20, "sad": 0.08 }
-}
-```
-
-If using socket events, the frontend will send binary payloads under event names like `emotion.frame` and may expect an ACK or `emotion.result` event with analysis.
+4. **Build for Production**:
+   ```bash
+   npm run build
+   ```
 
 ---
 
-### Backend API (`REACT_APP_API_URL` / `REACT_APP_SERVER_URL`)
+## Module Documentation
 
-The frontend contacts several endpoints to create rooms, fetch transcripts, and manage user history. Example endpoints used (implement any subset supported by your backend):
+### VideoMeet.jsx
 
-- `POST /api/v1/rooms` — create a room (body `{ hostName }`) -> returns `{ code: "ROOM123", roomId: "..." }`.
-- `GET /api/v1/rooms/:roomId` — validate / fetch room metadata.
-- `GET /api/v1/transcript` — list recent transcripts.
-- `POST /api/v1/transcript` — persist transcripts (used after transcription service returns text).
-- Auth endpoints under `/api/v1/users`: `POST /login`, `POST /register`, etc., returning tokens.
-- Meeting history endpoints (used by `AuthContext`): `/meetings`, `/users/meetings`, `/get_all_activity`, `/meetings/:code/participants`.
+#### Overview
+`VideoMeet.jsx` is the core React component for the video call interface, accessible at `/room/:roomId`. It manages WebRTC peer connections, Socket.io signaling, and UI elements for a video meeting, including participant cards, a spotlight view, chat, and emotion analysis.
 
-The frontend is defensive and tries multiple endpoints in order to maximize compatibility with different backend shapes — see the `AuthContext` provider for the exact order and fallback logic.
+#### Key Features
+- **Media Streaming**: Handles local/remote streams via WebRTC.
+- **Signaling**: Uses Socket.io for SDP/ICE candidate exchange and participant coordination.
+- **Active Speaker Detection**: Analyzes audio streams to highlight the active speaker.
+- **Chat**: Supports in-call messaging with optimistic updates.
+- **Screen Sharing**: Replaces video feed with screen media.
+- **Emotion Analysis**: Captures and analyzes audio/video clips (host-only or debug mode).
+- **Error Recovery**: Handles SDP mismatches, video stalls, and connection issues.
 
----
+#### Dependencies
+- React 18, `react-router-dom`, `socket.io-client`, `@mui/material`, `@mui/icons-material`, `framer-motion`, `AuthContext`, `mediaController.js`.
 
-## Auth & user state
+#### Key Functions
+- **Initialization (`start`)**: Requests media, initializes Socket.io, and sets up `mediaController`.
+- **Socket Handlers**: Manages events like `join-call`, `signal`, `chat-message`, `emotion.update`.
+- **WebRTC**: Creates `RTCPeerConnection` with STUN servers, handles tracks and ICE candidates.
+- **Active Speaker**: Uses `AudioContext` and `AnalyserNode` for RMS-based detection.
+- **Screen Sharing**: Replaces video tracks with `getDisplayMedia` stream.
+- **Emotion Analysis**: Sends periodic clips to `REACT_APP_EMOTION_URL`.
+- **Cleanup**: Stops tracks, closes connections, and navigates to `/home`.
 
-`AuthContext.jsx` exposes the app-wide auth helpers and two axios clients:
+#### UI Components
+- `ParticipantCard`: Shows participant video, name, and emotion badge.
+- `SpotlightCard`: Displays active speaker in a larger view.
+- `EmotionServicePanel`: Host-only panel for real-time emotion data.
+- `ChatInput`: Input for sending chat messages.
 
-- `client` — axios instance targeting user routes (`/api/v1/users`).
-- `apiClient` — general API axios instance (`/api/v1`) with an interceptor that attaches `localStorage.token` on each request.
+#### State
+- `remoteStreams`, `connecting`, `muted`, `videoOff`, `chatOpen`, `chatMessages`, `participantsMeta`, `myId`, `activeSpeakerId`, `shareEmotion`, `emotionsMap`.
 
-Key functions exported by the context:
+#### API Endpoints
+- **Socket.io**: `join-call`, `signal`, `chat-message`, `emotion.frame`, `end-meeting`, etc.
+- **REST**: `POST ${API_BASE}/transcript`, `POST ${EMOTION_ENDPOINT}`.
 
-- `handleLogin(username, password)` — logs in, stores token in `localStorage`, and sets default headers.
-- `handleRegister(name, username, password)` — creates account and returns a success message.
-- `getHistoryOfUser()` / `addToUserHistory(payload)` — helper methods to read / write meeting history using best-effort fallbacks.
+#### Error Handling
+- Alerts for media access failures.
+- Timeout for Socket.io connection issues.
+- Recovers from SDP mismatches and video stalls.
 
-`authentication.jsx` shows how the UI consumes `AuthContext` for login & register flows.
+#### Accessibility
+- ARIA attributes for buttons and chat.
+- Keyboard shortcuts (`M`, `V`, `C`).
 
----
+#### Styling
+- Uses `videoComponent.module.css` and `framer-motion` for animations.
 
-## Media & recordings
-
-- Recordings are handled via the DOM `MediaRecorder` API. The host records per participant audio (and local audio) and uploads audio chunks to the configured `REACT_APP_TRANSCRIPT_URL`.
-- The app also optionally captures short video/audio clips periodically for emotion analysis (host-only by default).
-- Video streams are rendered into `<video>` elements. Active-speaker detection uses Web Audio API analysis.
-
----
-
-## Troubleshooting & FAQ
-
-**No camera or mic available**
-- Ensure the app is served over HTTPS (or using `localhost` during development). Browser restrictions block `getUserMedia` on insecure contexts.
-- Check OS-level permissions for camera/microphone.
-
-**Frozen video frames**
-- Video tiles may show a blank/placeholder while `VideoMeet` detects and replaces frozen frames. Inspect the senders' bandwidth and network conditions.
-
-**Recordings not uploaded**
-- Confirm `REACT_APP_TRANSCRIPT_URL` is reachable and CORS allows the frontend origin.
-- Check console/network for errors during the multipart upload.
-
-**Emotion analysis not working**
-- The code uses multiple delivery methods. Ensure the server accepts at least one: socket binary frames, socket base64 payloads, or REST multipart POST.
-
-**401 / token issues**
-- `AuthContext` will clear tokens and redirect to `/login` on 401 responses. Ensure tokens are refreshed or reissued by login when expired.
-
----
-
-## Runbook / Deployment checklist
-
-1. Host your signalling server (Socket.IO) and ensure `REACT_APP_SIGNALING_URL` points to it.
-2. Host backend API and set `REACT_APP_API_URL` and `REACT_APP_SERVER_URL` accordingly.
-3. If you need transcription or emotion analysis, deploy those services and set `REACT_APP_TRANSCRIPT_URL` and `REACT_APP_EMOTION_URL`.
-4. Configure CORS to allow requests from your frontend origin.
-5. Build the frontend with `NODE_ENV=production` and serve static assets via CDN or web server.
-6. Monitor `socket` events, ICE negotiation logs, and media upload errors for next-level debugging.
+#### Troubleshooting
+- **Media Blocked**: Ensure HTTPS/localhost and permissions.
+- **Socket Issues**: Verify `REACT_APP_SIGNALING_URL`.
+- **CORS**: Check backend origin settings.
+- **Video Stalls**: Monitor bandwidth and WebRTC stats.
 
 ---
 
-## License
+### AuthContext.jsx
 
-This project does not include a license file by default. Add one (e.g. `MIT`) if you plan to open-source the repo.
+#### Overview
+`AuthContext.jsx` provides a React context for managing user authentication and meeting history. It centralizes login, registration, logout, and history operations, using Axios for API calls and localStorage for token/history persistence.
+
+#### Key Responsibilities
+- Manages user state and token storage.
+- Provides registration, login, and logout functions.
+- Handles meeting history with server/localStorage fallbacks.
+- Adds participants to meetings via API.
+
+#### Dependencies
+- React 18, `axios`, `http-status`, `react-router-dom`, `environment.js`.
+
+#### Context Value
+- `userData`, `setUserData`, `logout`, `handleRegister`, `handleLogin`, `getHistoryOfUser`, `addToUserHistory`, `addParticipant`.
+
+#### Axios Clients
+- `client`: `${server}/api/v1/users` (register, login, activity).
+- `apiClient`: `${server}/api/v1` (meetings, participants).
+
+#### Key Functions
+- **Interceptors**: Attach `Authorization: Bearer <token>`; handle 401 errors.
+- **handleRegister**: `POST /register` for new users.
+- **handleLogin**: `POST /login`, stores token, navigates to `/home`.
+- **getHistoryOfUser**: Fetches history from `/meetings`, `/users/meetings`, or localStorage.
+- **addToUserHistory**: Saves meetings to server or localStorage.
+- **addParticipant**: Adds participants via `/meetings/:code/participants`.
+
+#### Storage
+- `localStorage`: Stores `token` and `meeting_history_v1`.
+
+#### API Endpoints
+- `POST /api/v1/users/register`, `POST /api/v1/users/login`.
+- `GET /meetings`, `GET /users/meetings`, `POST /meetings/:code/participants`.
+
+#### Error Handling
+- Handles 401 errors with logout and redirect.
+- Falls back to alternative endpoints or localStorage.
+
+#### Troubleshooting
+- **401 Errors**: Verify token and backend logic.
+- **History Issues**: Check `SUPPORTS_GLOBAL_MEETINGS` and endpoints.
+- **CORS**: Ensure backend allows frontend origin.
 
 ---
+
+### mediaController.js
+
+#### Overview
+`mediaController.js` abstracts WebRTC media stream management, handling track toggling, placeholders, and cleanup. It ensures robust track replacement and cross-browser compatibility, especially for Safari.
+
+#### Key Features
+- Initializes media with streams, sockets, and peer connections.
+- Toggles audio/video with placeholder tracks.
+- Creates low-bandwidth canvas-based placeholders.
+- Replaces tracks across peers with fallbacks.
+- Cleans up resources to prevent leaks.
+
+#### Exported Functions
+- `initMediaController`, `setLocalStream`, `setVideoElement`, `setPeerConnections`, `setSocketRef`, `toggleVideo`, `toggleAudio`, `stopAllVideoAndCleanup`, `forceReleaseEverything`, `setPreferPeerPlaceholder`, `setExternalCleaners`, `registerRemoteVideoElement`, `unregisterRemoteVideoElement`, `attachRemoteStream`, `replaceTrackInPeers`, `replaceLocalTrack`, `stopAndRemoveTracks`, `restoreOutgoingVideoToPeers`, `stopTransceivers`.
+
+#### Internal State
+- `localStream`, `socketRef`, `pcsRef`, `localVideoEl`, `togglingAudio`, `togglingVideo`, `remoteVideoEls`, `_placeholderTrack`, `_placeholderStream`, `preferPeerPlaceholder`, `externalCleaners`.
+
+#### Error Handling
+- Multi-level track replacement fallbacks.
+- Safari-specific preview handling.
+- Prevents resource leaks with aggressive cleanup.
+
+#### Troubleshooting
+- **Black Screens (Safari)**: Ensure `localVideoEl` and call `refreshSafariPreview`.
+- **Track Issues**: Check peer connection state.
+- **Resource Leaks**: Register external cleaners; use `forceReleaseEverything`.
+
+---
+
+### home.jsx
+
+#### Overview
+`home.jsx` renders the home page, allowing users to create/join rooms, copy links, and view recent transcripts. It integrates with the backend for room creation and transcript fetching.
+
+#### Key Features
+- Creates rooms via `POST /rooms`.
+- Joins rooms by validating codes/URLs.
+- Fetches and displays deduplicated transcripts.
+- Copies links to clipboard.
+- Shows feedback via Material-UI Snackbars.
+
+#### Dependencies
+- React 18, `react-router-dom`, `@mui/material`, `home.css`.
+
+#### Key Functions
+- **createRoom**: Creates room and navigates.
+- **copyLink**: Creates room and copies link.
+- **joinRoom**: Validates and joins room.
+- **copyToClipboard**: Copies text with fallback.
+- **dedupeByCodeKeepNewest**: Deduplicates transcripts.
+
+#### UI Components
+- Form inputs for name and room code.
+- Buttons for room actions and history.
+- Transcript list with expand/download options.
+- Snackbar for feedback.
+
+#### State
+- `name`, `room`, `recentLocal`, `expandedTranscripts`, `snackOpen`, `snackMsg`, `snackSeverity`.
+
+#### API Endpoints
+- `POST /rooms`, `GET /rooms/:roomId`, `GET /transcript`.
+
+#### Error Handling
+- Shows Snackbars for API/input errors.
+- Falls back to `execCommand` for clipboard.
+
+#### Accessibility
+- ARIA labels for buttons.
+- Focusable inputs.
+
+#### Styling
+- Uses `home.css` and Material-UI.
+
+#### Troubleshooting
+- **Room Creation Fails**: Check `REACT_APP_API_URL`.
+- **Transcripts Not Loading**: Verify endpoint and fetch errors.
+- **Clipboard Issues**: Test fallback in older browsers.
+
+---
+
+## Troubleshooting
+
+- **Media Devices Blocked**: Ensure HTTPS/localhost and browser permissions.
+- **Socket.io Failures**: Verify `REACT_APP_SIGNALING_URL` and backend availability.
+- **CORS Issues**: Configure backend to allow frontend origin.
+- **API Errors**: Check `REACT_APP_API_URL` and server logs.
+- **Resource Leaks**: Ensure cleanup functions are called on component unmount.
+- **Video Stalls**: Monitor bandwidth and WebRTC connection stats.
+
+--- 

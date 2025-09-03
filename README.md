@@ -17,7 +17,7 @@ SkymeetAI is a modular meeting platform designed to meet high-scale production r
 ```
 +----------------+      +---------------------+      +----------------+
 |   Frontend     | <--> |  Signalling Server   | <--> |  Media Broker   |
-| (React / WebRTC)|      |   (Socket.IO w/     |      | (S3 / Object)   |
+| (React / WebRTC)|      |   (Socket.IO w/     |     |
 |                 |      | Redis adapter)      |      +----------------+
 +----------------+      +---------------------+             |
        |  ^                      | |                         |
