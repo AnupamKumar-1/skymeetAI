@@ -1,247 +1,207 @@
 # SkymeetAI
 
----
+## Project Overview
 
-SkymeetAI is a modular meeting platform designed to meet high-scale production requirements. It provides:
+SkymeetAI is a comprehensive real-time meeting and collaboration platform that integrates video conferencing, chat, participant tracking, automatic speech recognition (ASR), emotion analysis, and anomaly detection. The system supports multi-user video calls with WebRTC, real-time signaling via Socket.io, transcript generation, and AI-driven insights into participant emotions using both text-based and multimodal (audio-visual) models.
 
-- Robust, low-latency WebRTC meetings powered by Socket.IO signalling.
-- Host-side audio capture with deterministic chunking for reliable ASR ingestion.
-- Optional per-clip emotion-analysis pipeline for ML-enabled UX features.
-- An AI microservice integrating Whisper ASR + text-level emotion classification for fast, auditable transcripts.
+The platform is composed of four main components:
+- **Frontend**: A React-based single-page application (SPA) for the user interface, handling video meetings, authentication, and interactions.
+- **Backend**: A Node.js service using Express.js for APIs and Socket.io for real-time communication, managing user authentication, meetings, transcripts, and integration with AI services.
+- **Transcription Service**: A Flask-based web service for processing meeting audio, performing ASR with Whisper, classifying text-based emotions, and generating transcripts.
+- **Emotion Service**: A Flask-based multimodal emotion recognition system using deep learning for audio (mel spectrograms) and visual (facial) inputs, with anomaly detection via Isolation Forest.
 
----
+Key features across the system:
+- Real-time video/audio streaming, screen sharing, and chat.
+- User authentication with JWT.
+- Meeting creation, history, and analytics (e.g., emotion scores, keywords).
+- ASR and transcript generation in text/JSON formats.
+- Emotion classification (e.g., anger, joy, neutral) and anomaly detection for affective computing.
+- Integration between services for seamless data flow (e.g., backend forwards audio to emotion/transcription services).
 
+The system is designed for applications like virtual meetings, sentiment monitoring, or collaborative tools, with a focus on scalability, security, and ethical AI use.
 
-## High-level architecture
+## Datasets (For Emotion Service)
 
+The Emotion Service uses publicly available datasets:
+- **CREMA-D**: Audio recordings of emotions (anger, disgust, fear, happy, neutral, sad). Source: [Kaggle - CREMA-D](https://www.kaggle.com/datasets/ejlok1/cremad). License: CC BY 4.0.
+- **AffectNet Aligned**: Facial images labeled with emotions. Source: [Kaggle - AffectNet Aligned](https://www.kaggle.com/datasets/yakhyokhuja/affectnetaligned). License: Research/non-commercial use.
+
+**Note**: Download datasets manually and place in the appropriate directories (e.g., `data/audio/`, `data/images/`). Ensure ethical use, respecting privacy and avoiding biased applications.
+
+## Architecture Overview
+
+SkymeetAI follows a microservices architecture with real-time extensions:
+
+### High-Level Components
+1. **Frontend (React)**: Handles UI, WebRTC media, and client-side logic.
+2. **Backend (Node.js/Express/Socket.io)**: Manages APIs, real-time events, database (MongoDB), and integrations with AI services.
+3. **Transcription Service (Flask)**: Processes audio for ASR and text-based emotion classification.
+4. **Emotion Service (Flask)**: Analyzes audio/video for multimodal emotions and anomalies.
+
+### Data Flow
+- **User Interaction**: Frontend connects to Backend via APIs and Socket.io.
+- **Meeting Setup**: Backend creates rooms, tracks participants, and handles real-time events (e.g., join, chat, signals).
+- **Media Processing**: Frontend captures streams; Backend forwards audio/video to Transcription/Emotion Services.
+- **AI Analysis**: Transcription Service generates transcripts with text emotions; Emotion Service processes frames for multimodal insights. Results are stored in Backend DB and emitted via Socket.io.
+- **Persistence**: MongoDB stores users, meetings, chats, analytics, and transcripts.
+
+### Diagram (Text-Based Representation)
 ```
-+----------------+      +---------------------+      +----------------+
-|   Frontend     | <--> |  Signalling Server   | <--> |  Media Broker   |
-| (React / WebRTC)|      |   (Socket.IO w/     |     |
-|                 |      | Redis adapter)      |      +----------------+
-+----------------+      +---------------------+             |
-       |  ^                      | |                         |
-       |  |                      | |                         v
-       |  +----> Rest API <-------+ +----------------->  Transcription Service (Whisper)
-       |                       (JWT / REST)               Emotion Service (optional)
-       |                                                  ML Pipeline / Batch
-       v
-  Observability
-  (Tracing / Logs / Metrics)
-```
-
-**Notes:**
-- The signalling server is horizontally scalable behind a Load Balancer and uses Redis Pub/Sub (Socket.IO adapter) for cross-node message routing.
-- Media blobs are uploaded to an object store (S3 or equivalent) for durable processing; the backend forwards references to ML microservices.
-- Whisper / AI services are independent microservices and should be pinned to specific model versions for reproducibility.
-
----
-
-## Component responsibilities
-
-**Frontend (React — `VideoMeet`)**
-- Acquire local media (`getUserMedia`), render participants as `<video>` tiles.
-- Manage one `RTCPeerConnection` per remote participant with explicit offer/answer lifecycle.
-- Host-record per-participant audio streams using `MediaRecorder` with deterministic chunk sizes and monotonic timestamps.
-- Provide three emotion upload fallbacks: socket-binary, socket-base64, or REST multipart.
-- Authenticate via JWT, attach tokens to API calls.
-
-**Signalling Server (Node.js + Socket.IO)**
-- Authenticate socket connects via JWT policy.
-- Relay `signal` events (SDP, ICE) between participants.
-- Broadcast durable room events (`user-joined`, `user-left`, `transcription-update`, `emotion.update`).
-- Accept partial emotion uploads, stream or persist to object store, forward to ML service.
-
-**Backend REST API (Express)**
-- User & room management (create rooms, list transcripts, persist meeting metadata).
-- Transcript persistence endpoint for final transcripts and segment metadata.
-- Auth endpoints (JWT) and meeting history APIs consumed by `AuthContext`.
-
-**Transcription Service (ai_service)**
-- Deterministic audio preprocessing: convert to mono, 16 kHz WAV via `ffmpeg`.
-- Run Whisper (pinned model) to produce time-stamped segments.
-- Run text-level emotion classifier per segment and produce two artifacts: human `.txt` and structured `.json`.
-- Schedule ephemeral outputs for deletion and return stable download URLs.
-
-**Emotion/ML Pipeline (emotion_service)**
-- Preprocess audio/images → HDF5 → embeddings.
-- Train multimodal classifiers & anomaly detectors.
-- Provide an inference REST endpoint (`/analyze`) for short clip scoring. Model artifacts are versioned via git tags or artifact registry.
-
----
-
-## API contracts (stable surface)
-
-Design principles: keep payloads small, idempotent where possible, and explicit in time/range semantics.
-
-### `POST /api/v1/rooms`  — create room
-**Request**
-```json
-{ "hostName": "Alice" }
-```
-**Response**
-```json
-{ "roomCode": "ABCD1234", "roomId": "<uuid>", "createdAt": "2025-09-03T10:00:00Z" }
++-------------+
+|   Frontend  | <--> Socket.io / APIs <--> +-------------+
+| (React App) |                              |   Backend   |
++-------------+                              | (Node.js)   |
+                                             +-------------+
+                                                   |
+                                                   v
++-------------+                              +-------------+
+| Transcription| <--- Audio Uploads/Requests |   MongoDB   |
+| Service     |                              | (Database)  |
+| (Flask)     |                              +-------------+
++-------------+                                      |
+                                                   |
++-------------+                                      v
+|   Emotion   | <--- Frame/Audio Uploads ----> +-------------+
+| Service     |                                | Analytics & |
+| (Flask)     |                                | Transcripts |
++-------------+                                +-------------+
 ```
 
-### `POST /process_meeting` (ai_service)
-**Form (multipart)**: `audio_files[]`, `meeting_code`, `speaker_map` (JSON string)
-**Response**
-```json
-{
-  "success": true,
-  "transcript_text": "...",
-  "txt_filename": "MEETING_<uuid>.txt",
-  "json_filename": "MEETING_<uuid>.json",
-  "files_will_be_deleted_in_sec": 120
-}
+### Scalability Notes
+- Backend: Stateful (in-memory meeting state); use Redis for horizontal scaling.
+- Services: Models loaded at startup; GPU recommended for AI inference.
+- Potential Bottlenecks: Whisper transcription, FFmpeg conversions, WebRTC bandwidth.
+
+## Installation and Setup
+
+### Prerequisites
+- Python 3.8+ (for Flask services).
+- Node.js 18+ and npm (for Backend and Frontend).
+- MongoDB (for Backend).
+- FFmpeg (system-level, for audio/video processing in services).
+- GPU (optional, for faster AI inference via CUDA/Torch).
+- Git (for cloning the repo).
+
+### Steps
+1. Clone the repository:
+   ```
+   git clone <repo-url>
+   cd skymeetai
+   ```
+
+2. Install dependencies for each component (detailed below).
+
+3. Download datasets for Emotion Service (if using).
+
+4. Set up environment variables in `.env` files (see each component's section).
+
+### Component-Specific Installation
+
+#### Frontend (React)
+- Directory: `frontend/`
+- Install: `npm install`
+- Environment: Set `REACT_APP_API_URL`, `REACT_APP_SIGNALING_URL`, `REACT_APP_TRANSCRIPT_URL`, `REACT_APP_EMOTION_URL` in `.env`.
+
+#### Backend (Node.js)
+- Directory: `backend/`
+- Install: `npm install`
+- Environment Variables (in `.env`):
+  - `CLIENT_ORIGIN`: CORS origin (e.g., `http://localhost:3000`).
+  - `PORT`: Server port (default: 8000).
+  - `MONGO_URI`: MongoDB connection string.
+  - `JWT_SECRET`: For token signing.
+  - `EMOTION_SERVICE_URL`: Emotion Service endpoint (default: `http://localhost:5002/analyze`).
+  - `PARTIAL_UPLOAD_MAX_BYTES`: Upload size limit (default: 200MB).
+- Connect to MongoDB.
+
+#### Transcription Service (Flask)
+- Directory: `transcription_service/`
+- Install: `pip install -r requirements.txt` (includes Flask, Whisper from GitHub, transformers, torch, etc.).
+- Folders: Ensure `uploads/` and `outputs/` exist (auto-created on startup).
+- Configuration: Modify globals in `app.py` (e.g., `MIN_DURATION_SEC=0.30`, `CLEANUP_DELAY_SEC=120`).
+
+#### Emotion Service (Flask)
+- Directory: `emotion_service/`
+- Install: `pip install -r requirements.txt` (includes Torch, librosa, MTCNN, Flask, etc.).
+- Environment Variables (in `.env` or shell):
+  - `FLASK_CORS_ORIGINS`: CORS origins (e.g., `http://localhost:3000`).
+  - `BACKEND_URL`: Backend API for forwarding results.
+  - `LOG_LEVEL`: Logging level (e.g., `DEBUG`).
+- Preprocess data: Run scripts like `preprocess_images.py`, `preprocessing_audio.py`, etc.
+
+## Running the Application
+
+1. **Backend**: `node src/app.js` (or `pm2 start src/app.js` for production).
+2. **Transcription Service**: Development: `python app.py` (runs on `http://0.0.0.0:5001`). Production: `gunicorn -w 4 app:app -b 0.0.0.0:5001`.
+3. **Emotion Service**: Development: `FLASK_ENV=development python app.py` (runs on port 5002). Production: `gunicorn -w 4 app:app`.
+4. **Frontend**: `npm start` (runs on `http://localhost:3000`).
+
+Access the app at `http://localhost:3000`. Ensure services are running and URLs match environment configs.
+
+For testing:
+- Use curl/Postman for APIs.
+- Socket.io client for real-time events.
+
+## Key Pages and Usage (Frontend)
+
+- **Landing (`/`)**: Entry page.
+- **Authentication (`/auth`)**: Sign-in/register.
+- **Home (`/home`)**: Create/join rooms, view transcripts.
+- **History (`/history`)**: Past meetings.
+- **Video Meeting (`/room/:roomId`)**: Core call interface.
+
+Example Client Request (Transcription Service via curl):
 ```
-**Guarantee:** transient outputs are retained for the configured TTL; clients must download or the backend persist to storage if the transcript is required permanently.
-
-### `POST /api/v1/emotion` — upload clip
-**Form**: `meeting_id`, `participant_id`, `type` (`frame|audio|video`), `file` (multipart)
-**Response**
-```json
-{ "success": true, "emotions": { "happy": 0.72, "neutral": 0.20 } }
+curl -X POST http://localhost:5001/process_meeting \
+  -F "audio_files=@speaker1.webm" \
+  -F "speaker_map={\"speaker1\": \"Alice\"}"
 ```
 
----
+API Endpoints (Backend):
+- `/api/v1/users`: Login/register.
+- `/api/v1/meetings`: List/upsert meetings.
+- `/api/v1/transcript`: Manage transcripts.
 
-## Signalling & WebRTC flow (deterministic)
+Socket Events (Backend): `join-call`, `chat`, `signal`, `emotion.frame`, etc.
 
-1. Client requests local media and connects to Socket.IO with `Authorization: Bearer <JWT>`.
-2. Client emits `join-call` with `{ meetingCode, displayName, isHost }`.
-3. Server responds with `existing-participants` (array of participant metadata).
-4. For each remote peer, clients create `RTCPeerConnection`, add local tracks, createOffer(), setLocalDescription(), and send SDP via `signal` event to the remote peer.
-5. Remote side setRemoteDescription(), createAnswer(), and exchange ICE candidates via `signal` events.
-6. On negotiationcomplete + stable ICE, media flows P2P (or via TURN when NATed).
+## API Endpoints (Emotion Service)
+- POST `/analyze`: Analyze audio/video file.
 
-**Operational check**: record and emit metrics for `time_to_connected` per peer (offer → connected) and `ice_restart_count` to detect flaky networks.
+## Components Documentation
 
----
+### Frontend
+- **Technology Stack**: React 18, react-router-dom, socket.io-client, axios, @mui/material.
+- **Key Modules**:
+  - `VideoMeet.jsx`: Manages WebRTC, signaling, chat, screen sharing, emotion analysis.
+  - `AuthContext.jsx`: Handles auth, JWT, history.
+  - `mediaController.js`: Abstracts media streams and track management.
+  - `home.jsx`: Room creation/join, transcript display.
+- **Scripts**: `npm start`, `npm build`.
 
-## Security, privacy & compliance
+### Backend
+- **Models**: User, Meeting (with participants, chat, analytics), Transcript.
+- **Controllers**: User (auth/history), Emotion (forwarding), Transcript (CRUD).
+- **Socket Events**: Join/leave, chat, signals, uploads, emotions.
 
-- **Authentication:** JWT for REST and sockets. Short lived tokens recommended (rotate with refresh tokens or an SSO provider).
-- **Authorization:** Enforce room-level ACLs server-side. Hosts can mark rooms as private/public.
-- **Transport security:** TLS everywhere (LB → services → clients). No mixed content.
-- **Data at rest:** use SSE-KMS or server-side encryption for object store (S3) and encrypt DB secrets at rest.
-- **PII minimization:** store only metadata and transcript URIs by default. Raw audio should be deleted when not needed or moved to customer-controlled buckets.
-- **Compliance:** redact or ignore any compliance-sensitive features (e.g., call recording) unless explicit consent is captured.
+### Transcription Service
+- **Endpoints**: POST `/process_meeting`, GET `/outputs/<filename>`.
+- **Dependencies**: Flask, Whisper, transformers, FFmpeg.
+- **Configuration**: Globals in `app.py`.
 
----
+### Emotion Service
+- **Preprocessing/Training Scripts**: `preprocess_*.py`, `extract_embeddings.py`, `train_multimodal.py`, `train_anomaly.py`.
+- **Inference**: `predict.py` (CLI), `app.py` (API).
+- **Models**: ResNet18 + MLP for fusion, Isolation Forest for anomalies.
 
-## Scalability & resiliency strategy
+## Troubleshooting
+- **CORS Issues**: Verify origins in `.env` and service configs.
+- **Media Access**: Ensure HTTPS/localhost and browser permissions.
+- **Socket Failures**: Check URLs and backend logs.
+- **AI Latency**: Use GPU; monitor FFmpeg/Torch.
+- **Resource Leaks**: Ensure cleanup timers/jobs run.
+- **Errors**: Check console/server logs; fallback to localStorage for history.
 
-**Signalling / Real-time**
-- Socket.IO with Redis adapter for horizontal scaling.
-- Autoscale signalling nodes based on open socket count and event rate.
-- Use sticky sessions only if you don't have Redis adapter (not recommended).
+For detailed module docs, refer to sub-directories or original READMEs.
 
-**Media uploads & ML**
-- Offload media uploads to S3 using presigned URLs from the backend to avoid node memory pressure.
-- Process media asynchronously using workers (e.g., K8s Jobs / AWS Batch). Use message queue (RabbitMQ / SQS) for task dispatch.
-
-**Data storage**
-- MongoDB for user/meeting metadata (replica set + monitored backups).
-- Object store (S3) for blobs.
-- Use lifecycle rules on S3 for auto-expiry of ephemeral files.
-
-**Availability plan**
-- Multi-AZ deployment for DB and services.
-- Deploy critical services behind health-checked LBs with readiness/liveness probes.
-
----
-
-## Observability & SLOs
-
-**Metrics (minimum)**
-- Signalling request latency (95p & 99p)
-- Socket connect success rate & authentications errors
-- Media upload success rate and average duration
-- ASR pipeline end-to-end latency (upload → transcript available)
-- Error rate per service (4xx/5xx)
-
-**Tracing & logs**
-- Distributed tracing integration (OpenTelemetry). Include `trace_id` propagated across REST and socket events.
-- Structured logs (JSON) with correlation IDs.
-
-**SLOs (suggested)**
-- Socket connect success rate: 99.9% per week
-- Offer → connected latency: p95 < 2s under normal conditions
-- ASR transcript return time: p95 < 30s for < 60s clips (depends on model)
-- Media upload success rate: 99.5%
-
-**Alerting**
-- Page on sustained drop below SLOs or spike in 5xx errors.
-- Alert on task queue length > threshold (indicates backlog to ML workers).
-
----
-
-## Operational runbook (incidents & routine ops)
-
-**P1 — Signalling down / clients cannot join**
-1. Check LB health and signalling node instance health.
-2. Inspect Redis adapter connectivity (or sticky session / LB misconfiguration).
-3. Restart signalling nodes in a controlled rolling manner.
-4. Post-mortem: check autoscaling and throttling metrics.
-
-**P1 — ASR pipeline slow / backlog increasing**
-1. Inspect queue length and worker pod CPU/GPU utilization.
-2. Scale workers (increase replicas / add GPU instances if model uses GPU).
-3. If urgent, return degraded response to frontend indicating transcript pending.
-
-**Routine ops**
-- Daily: check error budget and SLO burn rates.
-- Weekly: rotate JWT signing keys if using self-managed secrets, or verify rotation for managed KMS.
-- Monthly: run canary deployment for new Whisper model versions and validate latency & transcript quality.
-
----
-
-## Developer quickstart & local dev matrix
-
-**Local matrix (fast path)**
-1. `yarn` / `npm install` in `frontend/` → `npm start`.
-2. `cd backend` → `npm install` → `npm run dev` (requires `MONGO_URI` env pointing to local Mongo).
-3. `cd ai_service` → `pip install -r requirements.txt` → `python app.py` (requires ffmpeg installed locally).
-4. Optional: `emotion_service` tools installed for ML work.
-
-**Env examples**
-- `REACT_APP_SIGNALING_URL=http://localhost:8000`
-- `REACT_APP_TRANSCRIPT_URL=http://localhost:5001/process_meeting`
-- `PORT=8000`, `MONGO_URI=mongodb://localhost:27017/skymeet`, `JWT_SECRET=devsecret`
-
-**Acceptance tests**
-- End-to-end smoke test that opens two headless browser clients, joins room, and verifies offer/answer exchange and transcript round-trip for a short recorded clip.
-
----
-
-## Troubleshooting & FAQ (engineered checks)
-
-**WebRTC: no video / black screen**
-- Confirm `getUserMedia` succeeded (browser console), retry permissions.
-- Check ICE candidate exchange logs; missing candidates often imply STUN/TURN misconfiguration.
-
-**Users unable to join intermittently**
-- Verify Redis adapter connectivity and open file/socket limits on signalling nodes.
-- Check LB connection draining or health-check misconfiguration.
-
-**Transcripts not generated**
-- Inspect object store to confirm audio blob uploaded successfully.
-- Check worker logs for ASR processing errors (model OOM, ffmpeg errors due to codecs).
-
----
-
-## Appendix: CLI flags, service envs, and contacts
-
-### Key CLI flags (selected)
-- `preprocessing_audio.py --audio_dir --out_h5 --fixed_duration --workers`
-- `train_multimodal.py --train_h5 --val_h5 --epochs --batch_size --lr`
-- `train_anomaly.py --train_h5 --n_estimators --contamination`
-
-### Must-set service envs (core)
-- Frontend: `REACT_APP_SIGNALING_URL`, `REACT_APP_API_URL`, `REACT_APP_TRANSCRIPT_URL`, `REACT_APP_EMOTION_URL`
-- Backend: `PORT`, `MONGO_URI`, `JWT_SECRET`, `CLIENT_ORIGIN`, `EMOTION_SERVICE_URL`
-- AI Service: ensure `ffmpeg` on PATH; `CLEANUP_DELAY_SEC` configurable (default 120s)
-
----
+## License
+This project is for educational/research purposes. Respect dataset licenses and ethical guidelines. No explicit license.
