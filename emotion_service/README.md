@@ -1,267 +1,280 @@
-# emotion_service — README
+# SkymeetAI - Emotion Service
 
-**Summary**
+## Project Overview
 
-`emotion_service` is a modular pipeline for building, training and evaluating multimodal emotion models (audio + image / face) and for running anomaly detection on the resulting embeddings. It includes preprocessing utilities, embedding extraction, paired HDF5 builders, training scripts (multimodal classification), and an anomaly detector (Isolation Forest). The repo expects datasets formatted into image and audio folders (examples below: CREMA‑D and AffectNetAligned).
+This project implements a multimodal system for emotion recognition and anomaly detection using audio and visual (facial) inputs. It combines deep learning models for feature extraction and fusion, trained on paired audio-image data, with an Isolation Forest for detecting anomalous inputs (e.g., out-of-distribution emotions or data artifacts).
 
-Datasets referenced in this project:
-- CREMA‑D: https://www.kaggle.com/datasets/ejlok1/cremad
-- AffectNet Aligned (face images): https://www.kaggle.com/datasets/yakhyokhuja/affectnetaligned
+Key features:
+- **Preprocessing**: Handles audio (mel spectrograms) and images (face cropping, resizing).
+- **Embedding Extraction**: Uses ResNet18 for images and a simple MLP for audio features.
+- **Pairing**: Aligns audio and image embeddings by emotion labels for training.
+- **Multimodal Training**: Fuses embeddings into a classifier for emotions (e.g., angry, happy, sad, neutral).
+- **Anomaly Detection**: Trains an Isolation Forest on fused embeddings to flag anomalies.
+- **Inference**: Predicts emotions and anomaly scores from audio/video inputs.
+- **API**: A Flask-based endpoint for real-time analysis.
+- **Evaluation**: Metrics, confusion matrices, and plots for model performance.
 
----
+The system is designed for applications like meeting analysis, sentiment monitoring, or affective computing.
 
-## Goals / Capabilities
+## Datasets
 
-- Preprocess raw audio into fixed- or variable-length features and store them in HDF5 + CSV manifest.
-- Extract image and audio embeddings (via pre-trained models or learned encoders) and save them as HDF5 files (`embeddings_images.h5`, `embeddings_audio.h5`).
-- Build paired HDF5s that align sample filenames across modalities for multimodal training and evaluation.
-- Train multimodal classifiers (image + audio) that can handle missing modalities and variable-length features.
-- Train an Isolation Forest anomaly detector on the concatenated embeddings and visualize/save scores.
+This project uses the following publicly available datasets:
 
----
+- **CREMA-D (Crowd-sourced Emotional Multimodal Actors Dataset)**:
+  - Source: [Kaggle - CREMA-D](https://www.kaggle.com/datasets/ejlok1/cremad)
+  - Description: Audio recordings of actors expressing emotions (anger, disgust, fear, happy, neutral, sad). Includes ~7,442 clips with emotion labels encoded in filenames.
+  - Usage: Audio preprocessing and emotion pairing.
+  - License: CC BY 4.0 (check Kaggle for details).
+  - Preparation: Place audio files in a directory like `data/audio/`. Labels are extracted from filenames (e.g., 'ANG' → 'anger').
 
-## Requirements / Installation
+- **AffectNet Aligned (Facial Emotion Dataset)**:
+  - Source: [Kaggle - AffectNet Aligned](https://www.kaggle.com/datasets/yakhyokhuja/affectnetaligned)
+  - Description: ~420,000 aligned facial images labeled with 8 emotions (angry, calm, disgust, fear, happy, neutral, sad, surprise). Split into train/val/test.
+  - Usage: Image preprocessing, face cropping, and emotion pairing.
+  - License: For research/non-commercial use (refer to original AffectNet paper and Kaggle terms).
+  - Preparation: Organize into folders like `data/images/train/{class_id}/image.jpg`. Class IDs map to emotions (e.g., 0=angry).
 
-The project uses Python 3.8+. Install dependencies with:
+**Note**: Download datasets from the links above. Ensure ethical use: these datasets involve human subjects, so respect privacy and avoid biased applications. The project filters to common emotions (angry, disgust, fear, happy, neutral, sad) for pairing.
 
-```bash
-pip install -r requirements.txt
+## Installation and Setup
+
+### Requirements
+- Python 3.8+
+- Libraries: Install via `pip install -r requirements.txt`. The `requirements.txt` file specifies the following dependencies with version constraints for compatibility and reproducibility:
+
+```
+torch
+numpy>=1.26.0,<2.0.0
+pandas>=2.3.0
+scikit-learn>=1.4.0
+scipy>=1.11.0
+
+librosa==0.11.0
+audioread==3.0.1
+soundfile>=0.12.1
+soxr>=0.5.0.post1
+
+Pillow>=10.0.0
+mtcnn==1.0.0
+opencv-python-headless<4.10.0
+
+Flask>=3.0.0
+click>=8.0.0
+blinker>=1.6.0
+itsdangerous>=2.1.0
+Jinja2>=3.1.0
+
+matplotlib>=3.8.0
+tqdm>=4.65.0
+joblib>=1.3.0
+
+platformdirs>=4.0.0
+pooch>=1.8.0
+lz4>=4.0.0
+gunicorn
+torchvision
+torchaudio
+h5py
 ```
 
-If you don't have a `requirements.txt` or want the core packages, a minimal list includes:
+**Notes on Dependencies**:
+- **Core ML**: `torch`, `torchvision`, `torchaudio` for PyTorch-based models and audio processing.
+- **Data Handling**: `numpy`, `pandas`, `scipy`, `h5py` for arrays, dataframes, and HDF5 storage.
+- **Audio**: `librosa`, `soundfile`, `audioread`, `soxr` for feature extraction (e.g., mel spectrograms).
+- **Images**: `Pillow`, `opencv-python-headless`, `mtcnn` for processing, face detection, and alignment.
+- **Web/API**: `Flask` and its dependencies (`click`, `blinker`, etc.) for the API server.
+- **Viz & Utils**: `matplotlib` for plots, `tqdm` for progress, `joblib` for model serialization.
+- **Deployment**: `gunicorn` for production serving, `lz4` for compression, `pooch`/`platformdirs` for caching/data management.
+
+Install with: `pip install -r requirements.txt`. Some packages (e.g., `opencv-python-headless`) are optional but recommended for headless environments like servers.
+
+### Environment Setup
+1. Clone the repository: `git clone <repo-url> && cd emotion_service`
+2. Install dependencies: `pip install -r requirements.txt`
+3. Download datasets and place in `data/` folder.
+4. (Optional) Set environment variables:
+   - `FLASK_CORS_ORIGINS=http://localhost:3000` for API CORS.
+   - `BACKEND_URL=http://your-backend/api` for forwarding results.
+   - `LOG_LEVEL=DEBUG` for verbose logging.
+   - Install system dependencies: `ffmpeg` for video processing (e.g., `apt-get install ffmpeg` on Ubuntu).
+
+## Preprocessing
+
+### Images
+- Script: `preprocess_images.py`
+- Usage: `python preprocess_images.py --src data/images --out preprocessed_images.h5 --size 224 --face_crop 1 --workers 4`
+- Steps:
+  - Scans folder structure (e.g., `train/{class_id}/img.jpg`).
+  - Optional: Face cropping using OpenCV Haar cascade or MTCNN.
+  - Center-crop to square, resize to 224x224, normalize to [0,1].
+  - Saves to HDF5: Groups for train/val/test with datasets `images` (N,H,W,C), `labels` (int), `paths` (str).
+
+### Audio
+- Script: `preprocessing_audio.py`
+- Usage: `python preprocessing_audio.py --audio_dir data/audio --out_h5 preprocessed_audio.h5 --fixed_duration 3.0 --workers 6`
+- Steps:
+  - Loads WAV files, resamples to 16kHz.
+  - Trims silence, normalizes, pads/truncates to fixed duration (e.g., 3s).
+  - Computes log-mel spectrograms (64 bands).
+  - Saves to HDF5: `features/fixed` (N,64,frames), `labels`, `paths`. Also generates a CSV manifest.
+
+### Embeddings Extraction
+- Script: `extract_embeddings.py`
+- Usage: Run directly: `python extract_embeddings.py`
+- Steps:
+  - Loads preprocessed HDF5s.
+  - Images: ResNet18 (pretrained) → 512-d embeddings.
+  - Audio: MLP on flattened mel → 128-d embeddings.
+  - Saves: `embeddings_images.h5` (split/embeddings (N,512)), `embeddings_audio.h5` (all/embeddings (N,128)).
+
+### Pairing Embeddings
+- Script: `make_paired_h5_filtered.py`
+- Usage: `python make_paired_h5_filtered.py`
+- Steps:
+  - Pairs image-audio embeddings by common emotions (angry, disgust, fear, happy, neutral, sad).
+  - Balances classes via oversampling audio pools.
+  - Saves per-split: `saved_paired_{split}_paired_embeddings.h5` with `image_embeddings` (N,512), `audio_embeddings` (N,128), `labels`, `paths`.
+
+## Training
+
+### Multimodal Emotion Classifier
+- Script: `train_multimodal.py`
+- Usage: `python train_multimodal.py --train_h5 saved_paired_train_paired_embeddings.h5 --val_h5 saved_paired_val_paired_embeddings.h5 --test_h5 saved_paired_test_paired_embeddings.h5 --epochs 50 --batch_size 128 --lr 0.001 --save_dir saved_models`
+- Architecture:
+  - Image: ResNet18 (pretrained) + MLP → 256-d.
+  - Audio: MLP on 128-d → 256-d.
+  - Fusion: Concat → Linear → Softmax (num_classes=6).
+- Features: Class weighting, OneCycleLR scheduler, validation.
+- Output: Saves best checkpoint `multimodal_best.pth` with state dict and class labels.
+
+### Anomaly Detector (Isolation Forest)
+- Script: `train_anomaly.py`
+- Usage: `python train_anomaly.py --train_h5 saved_paired_train_paired_embeddings.h5 --test_h5 saved_paired_test_paired_embeddings.h5 --save_dir results/anomaly --n_estimators 200 --contamination 0.01`
+- Steps:
+  - Concatenates image+audio embeddings (N,640).
+  - Fits IsolationForest.
+- Output: `isolation_forest.joblib`, anomaly scores (.npz), plots (histograms, PCA scatters).
+
+## Evaluation and Plotting
+
+- Script: `train_eval_plot.py`
+- Usage: `python train_eval_plot.py --model_path saved_models/multimodal_best.pth --test_h5 saved_paired_test_paired_embeddings.h5 --val_h5 saved_paired_val_paired_embeddings.h5 --save_dir results/plots`
+- Computes: Accuracy, F1, classification report, confusion matrix.
+- Plots: Confusion matrices (raw/normalized), test vs val accuracy, per-class F1.
+- Saves: Raw predictions (.npz) for further analysis.
+
+## Inference
+
+### Command-Line Prediction
+- Script: `predict.py`
+- Usage:
+  - Video: `python predict.py --video test.mp4 --multimodal saved_models/multimodal_best.pth --isolation results/anomaly/isolation_forest.joblib`
+  - Image+Audio: `python predict.py --image frame.jpg --audio clip.wav --multimodal ... --isolation ...`
+- Output: JSON with `emotion_probs` (dict of probabilities), `anomaly_score` (higher=more anomalous), `anomaly_flag` ("anomaly" or "normal").
+
+### API Endpoint
+- Script: `app.py`
+- Usage: Run `python app.py` (listens on port 5002). For production: `gunicorn -w 4 app:app`.
+- Endpoint: POST `/analyze`
+  - Form-data: `meeting_id` (str), `participant_id` (str), `file` (audio/video file), `type` (audio|video).
+- Response: JSON with timeline, anomalies, emotions.
+- Features: Preloads models, CORS support, optional backend forwarding.
+- Development: `FLASK_ENV=development python app.py`
+
+## Architecture Diagrams
+
+### Overall System Architecture
+The system follows a pipeline from data ingestion to inference. Below is a textual representation (ASCII art):
 
 ```
-numpy pandas librosa soundfile h5py tqdm
-torch torchvision torchaudio
-scikit-learn joblib matplotlib pillow opencv-python
-
-# optional: for web/frontend
-flask fastapi uvicorn
++-------------+     +-------------+
+|   CREMA-D   |     | AffectNet   |
+|   (Audio)   |     |  (Images)   |
++------+------+     +------+------+
+       |                   |
+       v                   v
++------+------+     +------+------+
+| Preprocess  |     | Preprocess  |
+| Audio       |     | Images      |
++------+------+     +------+------+
+       |                   |
+       v                   v
++------+------+     +------+------+
+| Extract     |     | Extract     |
+| Embeddings  |     | Embeddings  |
+| (MLP)       |     | (ResNet18)  |
++------+------+     +------+------+
+       |                   |
+       +---------+---------+
+                 |
+                 v
+        +--------+--------+
+        | Pair Embeddings |
+        | by Emotion     |
+        +--------+--------+
+                 |
+                 v
+        +--------+--------+
+        | Train Multimodal|
+        | Fusion Model    |
+        +--------+--------+
+                 |
+                 v
+        +--------+--------+
+        | Train Anomaly   |
+        | Detector (IF)   |
+        +--------+--------+
+                 |
+                 v
+        +--------+--------+
+        | Inference:      |
+        | Predict Emotions|
+        | & Anomalies     |
+        +--------+--------+
 ```
 
-Some scripts call `librosa`/`soundfile` for audio I/O and use `h5py` for HDF5. Training scripts expect PyTorch.
+### Multimodal Model Architecture
+Detailed structure of the emotion classifier (ASCII art):
 
----
+```
+Image Input (3x224x224)
+      |
+      v
+ResNet18 (Pretrained) --> 512-d Feature
+      |
+      v
+MLP (Linear + ReLU) --> 256-d Embedding
 
-## Quick start — recommended pipeline
+Audio Input (Mel Spectrogram --> Flattened 128-d)
+      |
+      v
+MLP (Linear + ReLU) --> 256-d Embedding
 
-1. **Prepare datasets**
-   - Place CREMA‑D audio files in a folder `data/audio/` (or change CLI flags accordingly).
-   - Place AffectNet-aligned face images in `data/images/` and ensure filenames align between modalities if you want paired samples.
-
-2. **Preprocess audio → HDF5 + manifest**
-
-```bash
-# from repo root (emotion_service)
-python preprocessing_audio.py \
-  --audio_dir data/audio \
-  --out_h5 preprocessed_audio.h5 \
-  --manifest_name audio_manifest.csv \
-  --fixed_duration 3.0 \
-  --workers 6
+Concat (512-d Total)
+      |
+      v
+Fusion Linear --> Logits (6 Classes: angry, disgust, fear, happy, neutral, sad)
+      |
+      v
+Softmax --> Probabilities
 ```
 
-Key flags:
-- `--audio_dir` : directory with audio files
-- `--out_h5` : output h5 file
-- `--manifest_name` : CSV manifest name (records filename, duration, label, etc.)
-- `--fixed_duration` : if > 0, force features to fixed length (faster batching)
-- `--workers` : number of processes for feature extraction
-
-3. **Extract image & audio embeddings**
-
-```bash
-python extract_embeddings.py --images_dir data/images --out_h5 embeddings_images.h5 --model resnet18
-python extract_embeddings.py --audio_h5 preprocessed_audio.h5 --out_h5 embeddings_audio.h5 --model audio_cnn
+### Anomaly Detection Flow
+```
+Paired Embeddings (Image 512-d + Audio 128-d) --> Concat (640-d)
+      |
+      v
+Isolation Forest Fit (on Train Data)
+      |
+      v
+Inference: Decision Function --> Anomaly Score
+           Predict --> -1 (Anomaly) / 1 (Normal)
 ```
 
-`extract_embeddings.py` should accept either a raw image folder or preprocessed audio H5 and export embeddings (typ. float32 arrays) to named datasets inside HDF5.
 
-4. **Make paired HDF5 (align modalities)**
+- Contributions: Welcome! Focus on improving fairness, reducing bias in emotion detection.
+- License: MIT (assumed; adjust as needed).
+- Citation: If using, cite the datasets and this project.
+- Warnings: Emotion AI can be biased (e.g., cultural differences). Use responsibly for research only.
 
-```bash
-python make_paired_h5_filtered.py --img_h5 embeddings_images.h5 --aud_h5 embeddings_audio.h5 --out_h5 paired_embeddings.h5
-```
-
-The paired H5 contains datasets for image features, audio features, filenames and optional labels — shaped for training/evaluation.
-
-5. **Train multimodal model**
-
-```bash
-python train_multimodal.py \
-  --train_h5 paired_embeddings_train.h5 \
-  --val_h5 paired_embeddings_val.h5 \
-  --epochs 30 \
-  --batch_size 64 \
-  --lr 1e-3 \
-  --save_dir saved_models
-```
-
-Important arguments (common):
-- `--train_h5` / `--val_h5` : H5 files with paired embeddings
-- `--batch_size` / `--epochs` / `--lr`
-- `--workers` : DataLoader workers
-- `--prefer_pairs_base` : option used in dataset helper (matching strategy)
-- `--device` : CPU/GPU selection (auto-detects CUDA)
-
-After training a `multimodal_best.pth` checkpoint will be saved to `saved_models/`.
-
-6. **Train anomaly detector (Isolation Forest)**
-
-```bash
-python train_anomaly.py \
-  --train_h5 paired_embeddings_train.h5 \
-  --test_h5 paired_embeddings_test.h5 \
-  --save_dir results/anomaly_iforest \
-  --n_estimators 100
-```
-
-This script will concatenate image+audio embeddings (when available), fit `sklearn.ensemble.IsolationForest`, save the fitted `joblib` model and produce score arrays and optional plots (score histograms, PCA scatter) in `results/anomaly_iforest/`.
-
-7. **Inference / prediction**
-
-There is a lightweight inference script that accepts video/image/audio inputs and outputs emotion predictions (or anomaly scores). Example (as referenced in `train_multimodal.py` docstring):
-
-```bash
-python inference/predict.py --video test2.mp4 --multimodal saved_models/multimodal_best.pth --isolation results/anomaly/isolation_forest.joblib
-```
-
-Or use the API:
-
-```bash
-python app.py  # starts the demo API / UI (check the file for host/port flags)
-```
-
----
-
-## File-by-file summary (how to use)
-
-- `preprocessing_audio.py` — converts raw WAV/MP3 to features stored inside an HDF5 and writes a manifest CSV. Supports fixed-duration framing and variable lengths. Use this as the first step for audio.
-
-- `extract_embeddings.py` — extract embeddings from images or audio features. For images it typically runs a pre-trained CNN backbone (ResNet, etc.) and for audio it runs a pre-trained audio encoder or a simple CNN/MLP path.
-
-- `make_paired_h5_filtered.py` — aligns image and audio embeddings by filename, optionally filters mismatches, and writes a paired HDF5 that training scripts consume.
-
-- `train_multimodal.py` — PyTorch training loop that:
-  - constructs dataset & streaming HDF5 loader
-  - builds simple MLP encoders if needed for 1-D embeddings
-  - supports missing modalities by zero-filling
-  - checkpoints best model to `saved_models/`
-
-- `train_anomaly.py` — trains an IsolationForest on concatenated embeddings. Saves `joblib` model and visualizations.
-
-- `inspect_h5.py` / `inspect_model.py` — small utilities to inspect dataset shapes, example entries, and model architectures.
-
-- `app.py` — demo server / API. Check the file to see available endpoints (e.g., `/predict`, `/upload`) and how to run.
-
-- `frontend/` — minimal UI to demo predictions and visualizations. Run `app.py` and open the frontend URL in the browser (check the API base path in the code).
-
----
-
-## Tips, gotchas & troubleshooting
-
-- **HDF5 concurrency**: feature extraction uses `ProcessPoolExecutor` (or multiprocessing). HDF5 writes should be performed by the main process only to avoid corruption. Preprocessing scripts in this repo implement this pattern; if you get corrupted H5, re-run and reduce `--workers`.
-
-- **Filename alignment**: paired datasets require consistent filenames (or a shared ID). Use the provided manifest CSVs to guarantee alignment.
-
-- **Memory usage**: `train_multimodal.py` supports streaming HDF5 loading so you don't need to load the entire dataset into memory. Still, large batch sizes + worker count can increase RAM usage.
-
-- **Variable-length audio**: either pad/trim to `--fixed_duration` for fixed-shape tensors, or store variable-length features and use a collate function during training.
-
-- **Reproducibility**: seed the RNGs (PyTorch, NumPy, random) if you need reproducible results — training scripts include basic seeding lines.
-
----
-
-## Example experiment reproducible steps (short)
-
-1. Preprocess audio:
-```bash
-python preprocessing_audio.py --audio_dir data/cremad/audio --out_h5 preprocessed_cremad_audio.h5 --fixed_duration 3.0
-```
-
-2. Extract embeddings for Images & Audio:
-```bash
-python extract_embeddings.py --images_dir data/affectnet/aligned --out_h5 embeddings_images.h5
-python extract_embeddings.py --audio_h5 preprocessed_cremad_audio.h5 --out_h5 embeddings_audio.h5
-```
-
-3. Build paired dataset:
-```bash
-python make_paired_h5_filtered.py --img_h5 embeddings_images.h5 --aud_h5 embeddings_audio.h5 --out_h5 paired_cremad_affectnet.h5
-```
-
-4. Train multimodal model:
-```bash
-python train_multimodal.py --train_h5 paired_cremad_affectnet_train.h5 --val_h5 paired_cremad_affectnet_val.h5 --epochs 25
-```
-
-5. Optionally train/read anomaly detector:
-```bash
-python train_anomaly.py --train_h5 paired_cremad_affectnet_train.h5 --test_h5 paired_cremad_affectnet_test.h5 --save_dir results/anomaly
-```
-
----
-
-## Where outputs are stored
-
-- `*.h5` — preprocessed features & embeddings
-- `saved_models/` — model checkpoints (best / last)
-- `results/` — evaluation metrics, plots, anomaly scores, joblib models
-
----
-
-## Contact / author
-
-If you want edits to this documentation (add specific command flags, include exact function signatures or CLI help text), tell me which script you want me to read in full and I will extract the exact flags & defaults from the code and update the README accordingly.
-
----
-
-
-## Exact CLI flags & defaults (extracted from scripts)
-
-### `preprocessing_audio.py`
-
-| Option(s) | Keyword args (type/default/help/action/dest) | Source snippet |
-|---|---|---|
-| `--audio_dir` | `required` = `True`<br>`help` = `Root folder containing audio files` | `parser.add_argument('--audio_dir', required=True, help='Root folder containing audio files')` |
-| `--out_h5` | `required` = `False`<br>`default` = `None`<br>`help` = `Output HDF5 file path (default: ./preprocessed_audio.h5)` | `parser.add_argument('--out_h5', default=None, help='Output HDF5 file path (default: ./preprocessed_audio.h5)')` |
-| `--out_dir` | `required` = `False`<br>`default` = `None`<br>`help` = `If set, write manifest CSV to this folder (defaults to project preprocessed_audio)` | `parser.add_argument('--out_dir', default=None, help='If set, write manifest CSV to this folder (defaults to project preprocessed_audio)')` |
-| `--sr` | `type` = `int`<br>`default` = `16000`<br>`help` = `Target sample rate` | `parser.add_argument('--sr', type=int, default=16000, help='Target sample rate')` |
-| `--n_fft` | `type` = `int`<br>`default` = `1024` | `parser.add_argument('--n_fft', type=int, default=1024)` |
-| `--hop_length` | `type` = `int`<br>`default` = `512` | `parser.add_argument('--hop_length', type=int, default=512)` |
-| `--n_mels` | `type` = `int`<br>`default` = `64` | `parser.add_argument('--n_mels', type=int, default=64)` |
-| `--fixed_duration` | `type` = `float`<br>`default` = `3.0`<br>`help` = `If >0, force fixed duration (seconds)` | `parser.add_argument('--fixed_duration', type=float, default=3.0, help='If >0, force fixed duration (seconds)')` |
-| `--workers` | `type` = `int`<br>`default` = `4` | `parser.add_argument('--workers', type=int, default=4)` |
-| `--manifest_name` | `default` = `audio_manifest.csv` | `parser.add_argument('--manifest_name', default='audio_manifest.csv')` |
-
-
-### `train_multimodal.py`
-
-| Option(s) | Keyword args (type/default/help/action/dest) | Source snippet |
-|---|---|---|
-| `--train_h5` | `required` = `True` | `parser.add_argument('--train_h5', required=True, help='Training paired HDF5')` |
-| `--val_h5` | `required` = `False`<br>`default` = `None` | `parser.add_argument('--val_h5', default=None, help='Validation paired HDF5')` |
-| `--epochs` | `type` = `int`<br>`default` = `30` | `parser.add_argument('--epochs', type=int, default=30)` |
-| `--batch_size` | `type` = `int`<br>`default` = `64` | `parser.add_argument('--batch_size', type=int, default=64)` |
-| `--lr` | `type` = `float`<br>`default` = `0.001` | `parser.add_argument('--lr', type=float, default=1e-3)` |
-| `--device` | `default` = `auto` | `parser.add_argument('--device', default='auto')` |
-| `--save_dir` | `default` = `saved_models` | `parser.add_argument('--save_dir', default='saved_models')` |
-| `--workers` | `type` = `int`<br>`default` = `4` | `parser.add_argument('--workers', type=int, default=4)` |
-| `--seed` | `type` = `int`<br>`default` = `42` | `parser.add_argument('--seed', type=int, default=42)` |
-| `--prefetch` | `action` = `store_true` | `parser.add_argument('--prefetch', action='store_true')` |
-
-
-### `train_anomaly.py`
-
-| Option(s) | Keyword args (type/default/help/action/dest) | Source snippet |
-|---|---|---|
-| `--train_h5` | `required` = `True` | `parser.add_argument('--train_h5', required=True, help='Training HDF5 for anomaly detector')` |
-| `--test_h5` | `default` = `None` | `parser.add_argument('--test_h5', default=None)` |
-| `--save_dir` | `default` = `saved_models` | `parser.add_argument('--save_dir', default='saved_models')` |
-| `--n_estimators` | `type` = `int`<br>`default` = `100` | `parser.add_argument('--n_estimators', type=int, default=100)` |
-| `--contamination` | `type` = `float`<br>`default` = `0.01` | `parser.add_argument('--contamination', type=float, default=0.01)` |
-| `--random_state` | `type` = `int`<br>`default` = `42` | `parser.add_argument('--random_state', type=int, default=42)` |
-| `--eval_with_labels` | `action` = `store_true`<br>`help` = `If set, try a simple binary eval when labels look binary (0/1)` | `parser.add_argument('--eval_with_labels', action='store_true', help='If set, try a simple binary eval when labels look binary (0/1)')` |
-
----
-
+For issues, open a GitHub ticket. Last updated: September 03, 2025.
