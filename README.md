@@ -206,7 +206,7 @@ Socket Events (Backend): `join-call`, `chat`, `signal`, `emotion.frame`, etc.
 For detailed module docs, refer to sub-directories or original READMEs.
 
 ## License
-This project is for educational/research purposes. Respect dataset licenses and ethical guidelines. No explicit license.
+This project is for educational/research purposes. Respect dataset licenses and ethical guidelines.
 
 MIT License
 
