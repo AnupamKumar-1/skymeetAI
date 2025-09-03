@@ -270,11 +270,3 @@ Isolation Forest Fit (on Train Data)
 Inference: Decision Function --> Anomaly Score
            Predict --> -1 (Anomaly) / 1 (Normal)
 ```
-
-
-- Contributions: Welcome! Focus on improving fairness, reducing bias in emotion detection.
-- License: MIT (assumed; adjust as needed).
-- Citation: If using, cite the datasets and this project.
-- Warnings: Emotion AI can be biased (e.g., cultural differences). Use responsibly for research only.
-
-For issues, open a GitHub ticket. Last updated: September 03, 2025.
