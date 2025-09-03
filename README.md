@@ -7,7 +7,7 @@ Built on WebRTC for smooth multi-user video calls and Socket.io for real-time si
 With its ability to not only connect people but also understand them—through emotion recognition and intelligent anomaly detection—SkymeetAI transforms meetings into smarter, more human-centered experiences.
 
 The platform is composed of four main components:
-- **Frontend**: A React-based single-page application (SPA) for the user interface, handling video meetings, authentication, and interactions.
+- **Frontend**: A React-based application for the user interface, handling video meetings, authentication, and interactions.
 - **Backend**: A Node.js service using Express.js for APIs and Socket.io for real-time communication, managing user authentication, meetings, transcripts, and integration with AI services.
 - **Transcription Service**: A Flask-based web service for processing meeting audio, performing ASR with Whisper, classifying text-based emotions, and generating transcripts.
 - **Emotion Service**: A Flask-based multimodal emotion recognition system using deep learning for audio (mel spectrograms) and visual (facial) inputs, with anomaly detection via Isolation Forest.
