@@ -203,7 +203,7 @@ Socket Events (Backend): `join-call`, `chat`, `signal`, `emotion.frame`, etc.
 - **Resource Leaks**: Ensure cleanup timers/jobs run.
 - **Errors**: Check console/server logs; fallback to localStorage for history.
 
-For detailed module docs, refer to sub-directories or original READMEs.
+For detailed module docs, refer to sub-directories.
 
 ## License
 This project is for educational/research purposes. Respect dataset licenses and ethical guidelines.
