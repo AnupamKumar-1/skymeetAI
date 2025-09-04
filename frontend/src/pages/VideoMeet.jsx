@@ -2475,11 +2475,15 @@ async function leaveCall() {
   );
 
   let spotlightId = null;
-  let spotlightStream = null;
-  if (activeSpeakerId && remoteStreams[activeSpeakerId]) {
-    spotlightId = activeSpeakerId;
-    spotlightStream = remoteStreams[activeSpeakerId];
-  }
+let spotlightStream = null;
+
+// for automatic spotlighting back later, set AUTO_SPOTLIGHT = true.
+const AUTO_SPOTLIGHT = false;
+if (AUTO_SPOTLIGHT && activeSpeakerId && remoteStreams[activeSpeakerId]) {
+  spotlightId = activeSpeakerId;
+  spotlightStream = remoteStreams[activeSpeakerId];
+}
+
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -2830,6 +2834,404 @@ function renderEmotionBadgeForId(participantId) {
 }
 
 
+// function ParticipantCard({ peerId, stream, compact = false, style = {} }) {
+//   const videoRef = useRef(null);
+//   const lastFrameTsRef = useRef(Date.now());
+//   const lastTimeRef = useRef(0);
+//   const [stalled, setStalled] = useState(false);
+
+//   const meta = participantsMeta.find((p) => p.id === peerId)?.meta || {};
+//   const em = emotionsMap[peerId];
+//   const name =
+//     (em && (em.__name || em.name || em.displayName || em.display_name)) ||
+//     meta.name ||
+//     (peerId ? peerId.slice(0, 6) : "Unknown");
+//   const isSpeaking = activeSpeakerId === peerId;
+
+//   const hasVideoTrack =
+//     stream &&
+//     typeof stream.getVideoTracks === "function" &&
+//     stream.getVideoTracks().some((t) => t.readyState === "live");
+
+//   // we consider "displaying video" only when there is a live track AND not stalled
+//   const showVideo = hasVideoTrack && !stalled;
+
+//   useEffect(() => {
+//     const el = videoRef.current;
+//     if (!el) return;
+
+//     // Helper: attach or clear srcObject depending on stalled state & stream
+//     const applyStreamToElement = () => {
+//       const live = hasVideoTrack;
+//       if (live && !stalled) {
+//         if (el.srcObject !== stream) {
+//           try {
+//             el.srcObject = stream;
+//             el.style.transform = "none";
+//             el.style.WebkitTransform = "none";
+//           } catch (err) {
+//             console.warn("failed to assign srcObject on participant video", err);
+//           }
+//         }
+//       } else {
+//         // If no live video or stalled, clear srcObject so browser stops showing last frame
+//         if (el.srcObject) {
+//           try {
+//             el.srcObject = null;
+//           } catch (err) {
+//             console.warn("failed to clear srcObject on participant video", err);
+//           }
+//         }
+//       }
+//     };
+
+//     // frame arrival callbacks
+//     let vframeHandle = null;
+//     let monitorInterval = null;
+//     let fallbackInterval = null;
+
+//     const STALL_MS = 2000; // adjust if you want faster/slower reaction
+//     const CHECK_MS = 300;
+
+//     // called when a new frame is rendered
+//     const onVideoFrame = () => {
+//       lastFrameTsRef.current = Date.now();
+//       // re-register the callback
+//       try {
+//         if (el.requestVideoFrameCallback) {
+//           vframeHandle = el.requestVideoFrameCallback(() => onVideoFrame());
+//         }
+//       } catch (err) {
+//         // ignore
+//       }
+//     };
+
+//     // start frame callback if supported
+//     try {
+//       if (typeof el.requestVideoFrameCallback === "function") {
+//         // prime it
+//         vframeHandle = el.requestVideoFrameCallback(() => onVideoFrame());
+//       } else {
+//         // fallback: monitor currentTime changes
+//         lastTimeRef.current = el.currentTime || 0;
+//         fallbackInterval = setInterval(() => {
+//           const ct = el.currentTime || 0;
+//           if (ct > lastTimeRef.current + 0.0001) {
+//             lastTimeRef.current = ct;
+//             lastFrameTsRef.current = Date.now();
+//           }
+//         }, 250);
+//       }
+//     } catch (err) {
+//       console.warn("video frame callback start failed", err);
+//     }
+
+//     // monitor to detect stall; toggles `stalled` state and applies stream attachments
+//     monitorInterval = setInterval(() => {
+//       const elapsed = Date.now() - lastFrameTsRef.current;
+//       if (elapsed > STALL_MS) {
+//         if (!stalled) {
+//           console.debug("[video-monitor] stalled for", peerId, elapsed, "ms - clearing display");
+//           setStalled(true);
+//         }
+//       } else {
+//         if (stalled) {
+//           console.debug("[video-monitor] frames resumed for", peerId);
+//           setStalled(false);
+//         }
+//       }
+//       // ensure srcObject applied/cleared according to new value
+//       applyStreamToElement();
+//     }, CHECK_MS);
+
+//     // Also apply immediately
+//     applyStreamToElement();
+
+//     return () => {
+//       // cleanup
+//       try {
+//         if (vframeHandle && typeof el.cancelVideoFrameCallback === "function") {
+//           el.cancelVideoFrameCallback(vframeHandle);
+//         }
+//       } catch (e) {}
+//       try {
+//         if (monitorInterval) clearInterval(monitorInterval);
+//         if (fallbackInterval) clearInterval(fallbackInterval);
+//       } catch (e) {}
+
+//       try {
+//         if (el && el.srcObject) el.srcObject = null;
+//       } catch (e) {}
+//     };
+//     // run when stream changes so we reattach; also re-run when hasVideoTrack changes
+//   }, [stream, peerId, hasVideoTrack, stalled]);
+
+//   // reset stalled when stream changes (so new stream starts as not-stalled)
+//   useEffect(() => {
+//     setStalled(false);
+//     lastFrameTsRef.current = Date.now();
+//   }, [stream]);
+
+//   return (
+//     <motion.div
+//       layout
+//       initial={{ opacity: 0, scale: 0.96 }}
+//       animate={{ opacity: 1, scale: 1 }}
+//       exit={{ opacity: 0, scale: 0.96 }}
+//       className={`${styles.participantCard} ${compact ? styles.participantCardCompact : ""} ${
+//         isSpeaking ? styles.participantCardSpeaking : ""
+//       }`}
+//       title={name}
+//       style={{
+//         width: compact ? 160 : "100%",
+//         height: compact ? 90 : "100%",
+//         aspectRatio: compact ? "16/9" : undefined,
+//         ...style,
+//       }}
+//     >
+//       {showVideo ? (
+//         <video
+//           autoPlay
+//           playsInline
+//           ref={videoRef}
+//           // muted attribute may be needed locally to prevent echo; keep current behavior
+//         />
+//       ) : (
+//         <div className={styles.cameraOffPlaceholder}>
+//           <div style={{ textAlign: "center" }}>
+//             <div style={{ fontSize: compact ? 18 : 36 }}>
+//               {name && name[0] ? name[0].toUpperCase() : <FaUserAlt />}
+//             </div>
+//             {!compact && (
+//               <div style={{ opacity: 0.9, marginTop: 6, fontSize: 13 }}>
+//                 {name} • Camera off
+//               </div>
+//             )}
+//           </div>
+//         </div>
+//       )}
+
+//       <div className={styles.participantOverlay}>
+//         <div className={styles.namePill}>
+//           <FaUserAlt /> <span>{name}</span>
+//         </div>
+//         {isSpeaking && (
+//           <div
+//             aria-hidden
+//             style={{
+//               position: "absolute",
+//               right: 8,
+//               top: 8,
+//               background: "rgba(0,150,255,0.15)",
+//               color: "rgba(0,150,255,0.95)",
+//               padding: "4px 8px",
+//               borderRadius: 6,
+//               fontWeight: 600,
+//               fontSize: 12,
+//             }}
+//           >
+//             Speaking
+//           </div>
+//         )}
+//       </div>
+
+//       {(isHost || DEBUG_SHOW_EMOTION_FOR_EVERYONE) && renderEmotionBadgeForId(peerId)}
+//     </motion.div>
+//   );
+// }
+
+// // SpotlightCard with the same robust video-frame monitor
+// function SpotlightCard({ id, stream }) {
+//   const videoRef = useRef(null);
+//   const lastFrameTsRef = useRef(Date.now());
+//   const lastTimeRef = useRef(0);
+//   const [stalled, setStalled] = useState(false);
+
+//   const meta = participantsMeta.find((p) => p.id === id)?.meta || {};
+//   const em = emotionsMap[id];
+//   const name =
+//     (em && (em.__name || em.name || em.displayName || em.display_name)) ||
+//     meta.name ||
+//     (id ? id.slice(0, 6) : "Unknown");
+//   const isSpeaking = activeSpeakerId === id;
+
+//   const hasVideoTrack =
+//     stream &&
+//     typeof stream.getVideoTracks === "function" &&
+//     stream.getVideoTracks().some((t) => t.readyState === "live");
+
+//   const showVideo = hasVideoTrack && !stalled;
+
+//   useEffect(() => {
+//     const el = videoRef.current;
+//     if (!el) return;
+
+//     const applyStreamToElement = () => {
+//       const live = hasVideoTrack;
+//       if (live && !stalled) {
+//         if (el.srcObject !== stream) {
+//           try {
+//             el.srcObject = stream;
+//             el.style.transform = "none";
+//             el.style.WebkitTransform = "none";
+//           } catch (err) {
+//             console.warn("failed to assign srcObject on spotlight video", err);
+//           }
+//         }
+//       } else {
+//         if (el.srcObject) {
+//           try {
+//             el.srcObject = null;
+//           } catch (err) {
+//             console.warn("failed to clear srcObject on spotlight video", err);
+//           }
+//         }
+//       }
+//     };
+
+//     let vframeHandle = null;
+//     let monitorInterval = null;
+//     let fallbackInterval = null;
+
+//     const STALL_MS = 2000;
+//     const CHECK_MS = 300;
+
+//     const onVideoFrame = () => {
+//       lastFrameTsRef.current = Date.now();
+//       try {
+//         if (el.requestVideoFrameCallback) {
+//           vframeHandle = el.requestVideoFrameCallback(() => onVideoFrame());
+//         }
+//       } catch (err) {}
+//     };
+
+//     try {
+//       if (typeof el.requestVideoFrameCallback === "function") {
+//         vframeHandle = el.requestVideoFrameCallback(() => onVideoFrame());
+//       } else {
+//         lastTimeRef.current = el.currentTime || 0;
+//         fallbackInterval = setInterval(() => {
+//           const ct = el.currentTime || 0;
+//           if (ct > lastTimeRef.current + 0.0001) {
+//             lastTimeRef.current = ct;
+//             lastFrameTsRef.current = Date.now();
+//           }
+//         }, 250);
+//       }
+//     } catch (err) {
+//       console.warn("video frame callback start failed", err);
+//     }
+
+//     monitorInterval = setInterval(() => {
+//       const elapsed = Date.now() - lastFrameTsRef.current;
+//       if (elapsed > STALL_MS) {
+//         if (!stalled) {
+//           console.debug("[video-monitor] spotlight stalled for", id, elapsed, "ms - clearing display");
+//           setStalled(true);
+//         }
+//       } else {
+//         if (stalled) {
+//           console.debug("[video-monitor] spotlight frames resumed for", id);
+//           setStalled(false);
+//         }
+//       }
+//       applyStreamToElement();
+//     }, CHECK_MS);
+
+//     applyStreamToElement();
+
+//     return () => {
+//       try {
+//         if (vframeHandle && typeof el.cancelVideoFrameCallback === "function") {
+//           el.cancelVideoFrameCallback(vframeHandle);
+//         }
+//       } catch (e) {}
+//       try {
+//         if (monitorInterval) clearInterval(monitorInterval);
+//         if (fallbackInterval) clearInterval(fallbackInterval);
+//       } catch (e) {}
+//       try {
+//         if (el && el.srcObject) el.srcObject = null;
+//       } catch (e) {}
+//     };
+//   }, [stream, id, hasVideoTrack, stalled]);
+
+//   useEffect(() => {
+//     setStalled(false);
+//     lastFrameTsRef.current = Date.now();
+//   }, [stream]);
+
+//   return (
+//     <motion.div
+//       layout
+//       initial={{ opacity: 0, scale: 0.98 }}
+//       animate={{ opacity: 1, scale: 1 }}
+//       exit={{ opacity: 0, scale: 0.98 }}
+//       className={`${styles.spotlight} ${isSpeaking ? styles.speaking : ""}`}
+//       style={{
+//         width: "100%",
+//         height: "100%",
+//         borderRadius: 12,
+//         position: "relative",
+//         display: "flex",
+//       }}
+//     >
+//       {showVideo ? (
+//         <video autoPlay playsInline ref={videoRef} style={{ width: "100%", height: "100%" }} />
+//       ) : (
+//         <div className={styles.cameraOffPlaceholder}>
+//           <div style={{ textAlign: "center" }}>
+//             <div style={{ fontSize: 56 }}>
+//               {name && name[0] ? name[0].toUpperCase() : <FaUserAlt />}
+//             </div>
+//             <div style={{ opacity: 0.9, marginTop: 8, fontSize: 16 }}>{name}</div>
+//             <div style={{ opacity: 0.75, marginTop: 6, fontSize: 13 }}>Camera off</div>
+//           </div>
+//         </div>
+//       )}
+
+//       <div style={{ position: "absolute", left: 12, bottom: 12 }}>
+//         <div
+//           style={{
+//             background: "rgba(0,0,0,0.45)",
+//             color: "white",
+//             padding: "6px 10px",
+//             borderRadius: 8,
+//             display: "flex",
+//             alignItems: "center",
+//             gap: 8,
+//             fontWeight: 700,
+//           }}
+//         >
+//           <FaUserAlt />
+//           <span>{name}</span>
+//         </div>
+//       </div>
+
+//       {isSpeaking && (
+//         <div
+//           style={{
+//             position: "absolute",
+//             right: 12,
+//             top: 12,
+//             background: "rgba(0,150,255,0.15)",
+//             color: "rgba(0,150,255,0.95)",
+//             padding: "6px 10px",
+//             borderRadius: 6,
+//             fontWeight: 700,
+//             fontSize: 13,
+//           }}
+//         >
+//           Speaking
+//         </div>
+//       )}
+
+//       {(isHost || DEBUG_SHOW_EMOTION_FOR_EVERYONE) && renderEmotionBadgeForId(id)}
+//     </motion.div>
+//   );
+// }
+
+
 function ParticipantCard({ peerId, stream, compact = false, style = {} }) {
   const videoRef = useRef(null);
   const lastFrameTsRef = useRef(Date.now());
@@ -2982,6 +3384,11 @@ function ParticipantCard({ peerId, stream, compact = false, style = {} }) {
         width: compact ? 160 : "100%",
         height: compact ? 90 : "100%",
         aspectRatio: compact ? "16/9" : undefined,
+        // non-layout-affecting active-speaker highlight:
+        outline: isSpeaking ? "3px solid #2ecc71" : "none",
+        outlineOffset: isSpeaking ? "0px" : undefined,
+        boxSizing: "border-box",
+        transition: "outline 160ms ease, box-shadow 160ms ease",
         ...style,
       }}
     >
@@ -2991,6 +3398,7 @@ function ParticipantCard({ peerId, stream, compact = false, style = {} }) {
           playsInline
           ref={videoRef}
           // muted attribute may be needed locally to prevent echo; keep current behavior
+          style={{ width: "100%", height: "100%", objectFit: "cover" }}
         />
       ) : (
         <div className={styles.cameraOffPlaceholder}>
@@ -3018,8 +3426,8 @@ function ParticipantCard({ peerId, stream, compact = false, style = {} }) {
               position: "absolute",
               right: 8,
               top: 8,
-              background: "rgba(0,150,255,0.15)",
-              color: "rgba(0,150,255,0.95)",
+              background: "rgba(46,204,113,0.12)", // subtle green background for badge to match outline
+              color: "rgba(46,204,113,0.95)",
               padding: "4px 8px",
               borderRadius: 6,
               fontWeight: 600,
@@ -3170,10 +3578,15 @@ function SpotlightCard({ id, stream }) {
         borderRadius: 12,
         position: "relative",
         display: "flex",
+        // apply same non-layout-affecting highlight for spotlight
+        outline: isSpeaking ? "3px solid #2ecc71" : "none",
+        outlineOffset: isSpeaking ? "0px" : undefined,
+        boxSizing: "border-box",
+        transition: "outline 160ms ease, box-shadow 160ms ease",
       }}
     >
       {showVideo ? (
-        <video autoPlay playsInline ref={videoRef} style={{ width: "100%", height: "100%" }} />
+        <video autoPlay playsInline ref={videoRef} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
       ) : (
         <div className={styles.cameraOffPlaceholder}>
           <div style={{ textAlign: "center" }}>
@@ -3210,8 +3623,8 @@ function SpotlightCard({ id, stream }) {
             position: "absolute",
             right: 12,
             top: 12,
-            background: "rgba(0,150,255,0.15)",
-            color: "rgba(0,150,255,0.95)",
+            background: "rgba(46,204,113,0.12)",
+            color: "rgba(46,204,113,0.95)",
             padding: "6px 10px",
             borderRadius: 6,
             fontWeight: 700,
