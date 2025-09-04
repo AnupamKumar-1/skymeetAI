@@ -1,10 +1,9 @@
-// VideoMeet.jsx
 import React, { useEffect, useRef, useState, useContext } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { AuthContext } from "../contexts/AuthContext";
 import io from "socket.io-client";
 import styles from "../styles/videoComponent.module.css";
-import { TRANSCRIPTS_ENABLED } from "../environment";
+import { TRANSCRIPTS_ENABLED, IS_PROD } from "../environment";
 
 import {
   FaMicrophone,
@@ -55,9 +54,22 @@ const TRANSCRIPT_ENDPOINT = (() => {
 })();
 
 
+// const EMOTION_ENDPOINT = (() => {
+//   const env = process.env.REACT_APP_EMOTION_URL;
+//   if (!env) return "http://localhost:5002/analyze";
+//   const trimmed = env.replace(/\/+$/, "");
+//   return trimmed.endsWith("/analyze") ? trimmed : `${trimmed}/analyze`;
+// })();
+
+const EMOTIONS_ENABLED = typeof IS_PROD !== "undefined" ? !IS_PROD : true;
+
 const EMOTION_ENDPOINT = (() => {
+  // short-circuit in production builds where emotion service should not be used
+  if (!EMOTIONS_ENABLED) return null;
+
   const env = process.env.REACT_APP_EMOTION_URL;
   if (!env) return "http://localhost:5002/analyze";
+
   const trimmed = env.replace(/\/+$/, "");
   return trimmed.endsWith("/analyze") ? trimmed : `${trimmed}/analyze`;
 })();
@@ -790,21 +802,210 @@ async function uploadRecordingsAndStoreTranscript() {
     return EMOTION_ENDPOINT;
   }
 
-  async function recordAndSendClip({ stream, meetingId, participantId, durationMs }) {
-    const socket = socketRef.current;
-    if (!stream || !socket || !socket.connected) {
-      console.debug("[emotion] skipping capture — no socket or disconnected", { participantId, connected: !!socket?.connected });
-      return;
-    }
-    if (!participantId) return;
-    if (participantId === myId) return;
+  // async function recordAndSendClip({ stream, meetingId, participantId, durationMs }) {
+  //   const socket = socketRef.current;
+  //   if (!stream || !socket || !socket.connected) {
+  //     console.debug("[emotion] skipping capture — no socket or disconnected", { participantId, connected: !!socket?.connected });
+  //     return;
+  //   }
+  //   if (!participantId) return;
+  //   if (participantId === myId) return;
 
-    if (recordingState.current.get(participantId)) return;
-    recordingState.current.set(participantId, true);
+  //   if (recordingState.current.get(participantId)) return;
+  //   recordingState.current.set(participantId, true);
 
+  //   const type = getTypeForStream(stream);
+  //   if (!type) {
+  //     recordingState.current.delete(participantId);
+  //     return;
+  //   }
+
+  //   let mime = "";
+  //   if (type === "video") {
+  //     mime = chooseSupportedMime(EMO_CONFIG.preferVideoMime) || "";
+  //   } else {
+  //     mime = chooseSupportedMime(EMO_CONFIG.preferAudioMime) || "";
+  //   }
+
+  //   let recorder;
+  //   try {
+  //     recorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+  //     mime = recorder.mimeType || mime;
+  //   } catch (err) {
+  //     try {
+  //       recorder = new MediaRecorder(stream);
+  //       mime = recorder.mimeType || "";
+  //     } catch (err2) {
+  //       console.error("MediaRecorder creation failed for", participantId, err2);
+  //       recordingState.current.delete(participantId);
+  //       return;
+  //     }
+  //   }
+
+  //   const chunks = [];
+  //   let stopped = false;
+
+  //   const onData = (ev) => {
+  //     if (ev.data && ev.data.size) chunks.push(ev.data);
+  //   };
+  //   recorder.ondataavailable = onData;
+  //   recorder.onerror = (err) => {
+  //     console.error("MediaRecorder error for", participantId, err);
+  //   };
+
+  //   recorder.onstop = async () => {
+  //     if (stopped) return;
+  //     stopped = true;
+  //     if (!chunks.length) {
+  //       recordingState.current.delete(participantId);
+  //       return;
+  //     }
+  //     try {
+  //       const blob = new Blob(chunks, { type: chunks[0].type || mime });
+  //       let arrayBuffer;
+  //       try {
+  //         arrayBuffer = await blob.arrayBuffer();
+  //       } catch (e) {
+  //         console.warn("[emotion] blob.arrayBuffer() failed, will try base64 fallback", e);
+  //         arrayBuffer = null;
+  //       }
+
+  //       // extension derived from mime
+  //       let ext = "webm";
+  //       try {
+  //         ext = (blob.type && blob.type.split("/")[1].split(";")[0]) || (type === "video" ? "webm" : "webm");
+  //         ext = ext.replace(/[^a-z0-9]/gi, "");
+  //       } catch (e) {}
+
+  //       const filename = `${participantId}.${ext}`;
+
+  //       // build payload (binary-first)
+  //       const payload = {
+  //         meetingId: (meetingId || "").toUpperCase(),
+  //         participantId,
+  //         type,
+  //         buffer: arrayBuffer,
+  //         mime: blob.type || mime,
+  //         filename,
+  //         timestamp: Date.now(),
+  //       };
+
+  //       console.debug("[emotion] prepared clip for", participantId, { mime: payload.mime, size: arrayBuffer ? arrayBuffer.byteLength : "unknown" });
+
+  //       // Attempt 1: try sending binary payload with ACK (use larger timeout)
+  //       let sentViaSocket = false;
+  //       if (arrayBuffer) {
+  //         const resp = await emitWithAckTimeout(EMO_CONFIG.eventName, payload, 8000);
+  //         if (resp.ok) {
+  //           console.debug("[emotion] sent binary clip (ack)", participantId, resp.ack);
+  //           recordingState.current.delete(participantId);
+  //           sentViaSocket = true;
+  //           return;
+  //         } else {
+  //           console.warn("[emotion] binary emit failed or timed out for", participantId, resp.reason);
+  //         }
+  //       } else {
+  //         console.warn("[emotion] no arrayBuffer available to send for", participantId);
+  //       }
+
+  //       // Fallback: send base64 Data URL (slower but more compatible)
+  //       if (!sentViaSocket) {
+  //         try {
+  //           const dataUrl = await blobToDataURL(blob);
+  //           const payloadBase64 = {
+  //             meetingId: (meetingId || "").toUpperCase(),
+  //             participantId,
+  //             type,
+  //             dataUrl, // data:image/...;base64,...  OR data:audio/...
+  //             mime: blob.type || mime,
+  //             filename,
+  //             timestamp: Date.now(),
+  //           };
+  //           // we use a different event name so server can detect fallback if needed
+  //           const resp2 = await emitWithAckTimeout(`${EMO_CONFIG.eventName}.base64`, payloadBase64, 12000);
+  //           if (resp2.ok) {
+  //             console.debug("[emotion] sent base64 fallback clip (ack)", participantId);
+  //             recordingState.current.delete(participantId);
+  //             sentViaSocket = true;
+  //             return;
+  //           } else {
+  //             console.warn("[emotion] base64 fallback emit failed for", participantId, resp2.reason);
+  //           }
+  //         } catch (fbErr) {
+  //           console.error("[emotion] fallback base64 send failed for", participantId, fbErr);
+  //         }
+  //       }
+
+  //       // If both socket attempts failed, try REST fallback to Emotion service /analyze
+  //       if (!sentViaSocket) {
+  //         try {
+  //           const analyzeUrl = buildAnalyzeUrl();
+  //           const fd = new FormData();
+  //           // emotion_service app.py expects meeting_id and participant_id
+  //           fd.append("meeting_id", (meetingId || "").toUpperCase());
+  //           fd.append("participant_id", participantId);
+  //           fd.append("type", type || "audio");
+  //           fd.append("file", blob, filename);
+
+  //           console.debug("[emotion] attempting REST fallback to", analyzeUrl, { participantId, filename });
+  //           const r = await fetch(analyzeUrl, {
+  //             method: "POST",
+  //             body: fd,
+  //           });
+  //           if (r.ok) {
+  //             console.debug("[emotion] REST fallback upload ok for", participantId);
+  //           } else {
+  //             console.warn("[emotion] REST fallback returned non-ok", participantId, await r.text());
+  //           }
+  //         } catch (restErr) {
+  //           console.error("[emotion] REST fallback error for", participantId, restErr);
+  //         }
+  //       }
+  //     } catch (e) {
+  //       console.error("Failed to finalize/send clip for", participantId, e);
+  //     } finally {
+  //       recordingState.current.delete(participantId);
+  //     }
+  //   };
+
+  //   try {
+  //     recorder.start();
+  //     setTimeout(() => {
+  //       try {
+  //         if (recorder && recorder.state !== "inactive") recorder.stop();
+  //       } catch (e) {
+  //         console.warn("Failed to stop recorder for", participantId, e);
+  //         recordingState.current.delete(participantId);
+  //       }
+  //     }, durationMs);
+  //   } catch (e) {
+  //     console.error("Failed to start recorder for", participantId, e);
+  //     recordingState.current.delete(participantId);
+  //   }
+  // }
+
+async function recordAndSendClip({ stream, meetingId, participantId, durationMs }) {
+  // Honor build-time flag: if emotions are disabled, do nothing.
+  if (typeof EMOTIONS_ENABLED !== "undefined" && !EMOTIONS_ENABLED) {
+    console.debug("[emotion] disabled by build (IS_PROD=true); skipping recordAndSendClip", { participantId });
+    return;
+  }
+
+  const socket = socketRef.current;
+  if (!stream || !socket || !socket.connected) {
+    console.debug("[emotion] skipping capture — no socket or disconnected", { participantId, connected: !!socket?.connected });
+    return;
+  }
+  if (!participantId) return;
+  if (participantId === myId) return;
+
+  // protect re-entrancy per participant
+  if (recordingState.current.get(participantId)) return;
+  recordingState.current.set(participantId, true);
+
+  try {
     const type = getTypeForStream(stream);
     if (!type) {
-      recordingState.current.delete(participantId);
       return;
     }
 
@@ -824,8 +1025,7 @@ async function uploadRecordingsAndStoreTranscript() {
         recorder = new MediaRecorder(stream);
         mime = recorder.mimeType || "";
       } catch (err2) {
-        console.error("MediaRecorder creation failed for", participantId, err2);
-        recordingState.current.delete(participantId);
+        console.error("[emotion] MediaRecorder creation failed for", participantId, err2);
         return;
       }
     }
@@ -838,19 +1038,20 @@ async function uploadRecordingsAndStoreTranscript() {
     };
     recorder.ondataavailable = onData;
     recorder.onerror = (err) => {
-      console.error("MediaRecorder error for", participantId, err);
+      console.error("[emotion] MediaRecorder error for", participantId, err);
     };
 
     recorder.onstop = async () => {
       if (stopped) return;
       stopped = true;
+
       if (!chunks.length) {
-        recordingState.current.delete(participantId);
         return;
       }
+
       try {
         const blob = new Blob(chunks, { type: chunks[0].type || mime });
-        let arrayBuffer;
+        let arrayBuffer = null;
         try {
           arrayBuffer = await blob.arrayBuffer();
         } catch (e) {
@@ -883,14 +1084,17 @@ async function uploadRecordingsAndStoreTranscript() {
         // Attempt 1: try sending binary payload with ACK (use larger timeout)
         let sentViaSocket = false;
         if (arrayBuffer) {
-          const resp = await emitWithAckTimeout(EMO_CONFIG.eventName, payload, 8000);
-          if (resp.ok) {
-            console.debug("[emotion] sent binary clip (ack)", participantId, resp.ack);
-            recordingState.current.delete(participantId);
-            sentViaSocket = true;
-            return;
-          } else {
-            console.warn("[emotion] binary emit failed or timed out for", participantId, resp.reason);
+          try {
+            const resp = await emitWithAckTimeout(EMO_CONFIG.eventName, payload, 8000);
+            if (resp && resp.ok) {
+              console.debug("[emotion] sent binary clip (ack)", participantId, resp.ack);
+              sentViaSocket = true;
+              return;
+            } else {
+              console.warn("[emotion] binary emit failed or timed out for", participantId, resp?.reason);
+            }
+          } catch (emitErr) {
+            console.warn("[emotion] binary emit threw for", participantId, emitErr);
           }
         } else {
           console.warn("[emotion] no arrayBuffer available to send for", participantId);
@@ -909,15 +1113,13 @@ async function uploadRecordingsAndStoreTranscript() {
               filename,
               timestamp: Date.now(),
             };
-            // we use a different event name so server can detect fallback if needed
             const resp2 = await emitWithAckTimeout(`${EMO_CONFIG.eventName}.base64`, payloadBase64, 12000);
-            if (resp2.ok) {
+            if (resp2 && resp2.ok) {
               console.debug("[emotion] sent base64 fallback clip (ack)", participantId);
-              recordingState.current.delete(participantId);
               sentViaSocket = true;
               return;
             } else {
-              console.warn("[emotion] base64 fallback emit failed for", participantId, resp2.reason);
+              console.warn("[emotion] base64 fallback emit failed for", participantId, resp2?.reason);
             }
           } catch (fbErr) {
             console.error("[emotion] fallback base64 send failed for", participantId, fbErr);
@@ -926,32 +1128,38 @@ async function uploadRecordingsAndStoreTranscript() {
 
         // If both socket attempts failed, try REST fallback to Emotion service /analyze
         if (!sentViaSocket) {
-          try {
-            const analyzeUrl = buildAnalyzeUrl();
-            const fd = new FormData();
-            // emotion_service app.py expects meeting_id and participant_id
-            fd.append("meeting_id", (meetingId || "").toUpperCase());
-            fd.append("participant_id", participantId);
-            fd.append("type", type || "audio");
-            fd.append("file", blob, filename);
+          // Only attempt REST fallback if we have a configured endpoint
+          if (typeof EMOTION_ENDPOINT === "string" && EMOTION_ENDPOINT) {
+            try {
+              const analyzeUrl = buildAnalyzeUrl ? buildAnalyzeUrl() : EMOTION_ENDPOINT;
+              const fd = new FormData();
+              // emotion_service app.py expects meeting_id and participant_id
+              fd.append("meeting_id", (meetingId || "").toUpperCase());
+              fd.append("participant_id", participantId);
+              fd.append("type", type || "audio");
+              fd.append("file", blob, filename);
 
-            console.debug("[emotion] attempting REST fallback to", analyzeUrl, { participantId, filename });
-            const r = await fetch(analyzeUrl, {
-              method: "POST",
-              body: fd,
-            });
-            if (r.ok) {
-              console.debug("[emotion] REST fallback upload ok for", participantId);
-            } else {
-              console.warn("[emotion] REST fallback returned non-ok", participantId, await r.text());
+              console.debug("[emotion] attempting REST fallback to", analyzeUrl, { participantId, filename });
+              const r = await fetch(analyzeUrl, {
+                method: "POST",
+                body: fd,
+              });
+              if (r.ok) {
+                console.debug("[emotion] REST fallback upload ok for", participantId);
+              } else {
+                console.warn("[emotion] REST fallback returned non-ok", participantId, await r.text());
+              }
+            } catch (restErr) {
+              console.error("[emotion] REST fallback error for", participantId, restErr);
             }
-          } catch (restErr) {
-            console.error("[emotion] REST fallback error for", participantId, restErr);
+          } else {
+            console.debug("[emotion] no EMOTION_ENDPOINT configured — skipping REST fallback", { participantId });
           }
         }
       } catch (e) {
-        console.error("Failed to finalize/send clip for", participantId, e);
+        console.error("[emotion] Failed to finalize/send clip for", participantId, e);
       } finally {
+        // always clear the recording flag for this participant
         recordingState.current.delete(participantId);
       }
     };
@@ -962,20 +1170,72 @@ async function uploadRecordingsAndStoreTranscript() {
         try {
           if (recorder && recorder.state !== "inactive") recorder.stop();
         } catch (e) {
-          console.warn("Failed to stop recorder for", participantId, e);
+          console.warn("[emotion] Failed to stop recorder for", participantId, e);
           recordingState.current.delete(participantId);
         }
       }, durationMs);
     } catch (e) {
-      console.error("Failed to start recorder for", participantId, e);
+      console.error("[emotion] Failed to start recorder for", participantId, e);
+      recordingState.current.delete(participantId);
+    }
+  } finally {
+    // in case we exited early before recorder.onstop cleanup, ensure the flag is cleared
+    // but only if recorder lifecycle didn't clear it already (defensive)
+    if (recordingState.current.get(participantId)) {
+      // allow onstop/finally to clear it normally; this is just defensive cleanup if something blew up synchronously
+      // NOTE: avoid double-delete noise
       recordingState.current.delete(participantId);
     }
   }
+}
+
+
+//   function startPeriodicEmotionCapture({
+//   clipDurationMs = EMO_CONFIG.clipDurationMs,
+//   intervalMs = EMO_CONFIG.captureIntervalMs,
+// } = {}) {
+//   stopPeriodicEmotionCapture();
+
+//   // Only allow the host (or debug opt-in) to run periodic captures.
+//   if (!isHost && !DEBUG_SHOW_EMOTION_FOR_EVERYONE) {
+//     console.debug("[emotion] startPeriodicEmotionCapture called but this client is not host — ignoring");
+//     return;
+//   }
+
+//   const doCapturePass = async () => {
+//     try {
+//       const streamsMap = remoteStreamsRef.current || {};
+//       for (const [participantId, stream] of Object.entries(streamsMap)) {
+//         if (!participantId || participantId === myId) continue;
+//         if (!stream) continue;
+//         recordAndSendClip({
+//           stream,
+//           meetingId: roomId,
+//           participantId,
+//           durationMs: clipDurationMs,
+//         });
+//       }
+//     } catch (e) {
+//       console.error("Error in emotion capture pass", e);
+//     }
+//   };
+
+//   doCapturePass();
+//   emoIntervalHandleRef.current = setInterval(doCapturePass, intervalMs);
+  // }
 
   function startPeriodicEmotionCapture({
   clipDurationMs = EMO_CONFIG.clipDurationMs,
   intervalMs = EMO_CONFIG.captureIntervalMs,
 } = {}) {
+  // If EMOTIONS_ENABLED is defined and false (e.g. IS_PROD === true), no-op and ensure any existing interval is stopped.
+  if (typeof EMOTIONS_ENABLED !== "undefined" && !EMOTIONS_ENABLED) {
+    console.debug("[emotion] disabled by build (IS_PROD=true); skipping startPeriodicEmotionCapture");
+    stopPeriodicEmotionCapture();
+    return;
+  }
+
+  // stop any existing capture loop before starting a new one
   stopPeriodicEmotionCapture();
 
   // Only allow the host (or debug opt-in) to run periodic captures.
@@ -988,23 +1248,32 @@ async function uploadRecordingsAndStoreTranscript() {
     try {
       const streamsMap = remoteStreamsRef.current || {};
       for (const [participantId, stream] of Object.entries(streamsMap)) {
-        if (!participantId || participantId === myId) continue;
-        if (!stream) continue;
-        recordAndSendClip({
-          stream,
-          meetingId: roomId,
-          participantId,
-          durationMs: clipDurationMs,
-        });
+        try {
+          if (!participantId || participantId === myId) continue;
+          if (!stream) continue;
+
+          // fire-and-forget is fine here (preserves original behavior).
+          // recordAndSendClip should itself be a no-op when emotions are disabled.
+          recordAndSendClip({
+            stream,
+            meetingId: roomId,
+            participantId,
+            durationMs: clipDurationMs,
+          });
+        } catch (innerErr) {
+          console.warn("[emotion] error handling participant capture", participantId, innerErr);
+        }
       }
     } catch (e) {
-      console.error("Error in emotion capture pass", e);
+      console.error("[emotion] Error in emotion capture pass", e);
     }
   };
 
+  // run immediately and then start the interval
   doCapturePass();
   emoIntervalHandleRef.current = setInterval(doCapturePass, intervalMs);
 }
+
 
 
   function stopPeriodicEmotionCapture() {
@@ -2250,48 +2519,226 @@ async function leaveCall() {
     return false;
   };
 
+// function formatTopEmotion(emotion) {
+//   if (!emotion) return null;
+//   try {
+//     // 1) explicit top object { top: { label, score } }
+//     if (emotion.top && emotion.top.label) {
+//       return { label: String(emotion.top.label).toLowerCase(), score: Number(emotion.top.score) || 0 };
+//     }
+
+//     // 2) summary object (server might send that shape)
+//     if (emotion.summary && typeof emotion.summary === "object") {
+//       const entries = Object.entries(emotion.summary).filter(([k, v]) => typeof v === "number");
+//       if (entries.length) {
+//         entries.sort((a, b) => b[1] - a[1]);
+//         return { label: String(entries[0][0]).toLowerCase(), score: Number(entries[0][1]) || 0 };
+//       }
+//     }
+
+//     // 3) common nested probability shapes
+//     const nestedKeys = ["emotion_probs", "scores", "probs", "probabilities", "results"];
+//     for (const nk of nestedKeys) {
+//       const nested = emotion[nk];
+//       if (nested && typeof nested === "object") {
+//         const entries = Object.entries(nested).filter(([k, v]) => typeof v === "number");
+//         if (entries.length) {
+//           entries.sort((a, b) => b[1] - a[1]);
+//           return { label: String(entries[0][0]).toLowerCase(), score: Number(entries[0][1]) || 0 };
+//         }
+//       }
+//     }
+
+//     // 4) fallback: top-level numeric entries — but ignore meta/internal keys (very important)
+//     const isMetaKey = (k) =>
+//       k.startsWith("__") ||
+//       ["anomaly_score", "anomalyFlag", "anomaly_flag", "timestamp", "ts", "time", "frameTime"].includes(k);
+//     const entries = Object.entries(emotion).filter(([k, v]) => typeof v === "number" && !isMetaKey(k));
+//     if (entries.length) {
+//       entries.sort((a, b) => b[1] - a[1]);
+//       return { label: String(entries[0][0]).toLowerCase(), score: Number(entries[0][1]) || 0 };
+//     }
+
+//     // 5) emotion is a plain string label
+//     if (typeof emotion === "string") return { label: emotion.toLowerCase(), score: 0 };
+
+//     return null;
+//   } catch (err) {
+//     console.warn("formatTopEmotion error:", err);
+//     return null;
+//   }
+// }
+
+// const EMOJI_MAP = {
+//   angry: "😠",
+//   disgust: "🤢",
+//   fear: "😨",
+//   happy: "😄",
+//   neutral: "😐",
+//   sad: "😢",
+//   joy: "😄",
+//   surprise: "😮",
+//   contempt: "😒",
+// };
+
+// function getTopEmotionLabel(emotion) {
+//   const top = formatTopEmotion(emotion);
+//   return top ? String(top.label).toLowerCase() : null;
+// }
+
+// function renderEmojiLabelForEmotion(emotion) {
+//   const label = getTopEmotionLabel(emotion);
+//   if (!label) return null;
+//   const emoji = EMOJI_MAP[label] || "🫥";
+//   const labelCap = label.charAt(0).toUpperCase() + label.slice(1);
+//   return `${emoji} ${labelCap}`;
+// }
+
+//   function renderEmotionBadgeForId(participantId) {
+//   const em = emotionsMap[participantId];
+//   if (!em) return null;
+//   const display = renderEmojiLabelForEmotion(em);
+//   if (!display) return null;
+//   return (
+//     <div
+//       style={{
+//         position: "absolute",
+//         right: 8,
+//         top: 8,
+//         background: "rgba(0,0,0,0.6)",
+//         color: "white",
+//         padding: "4px 8px",
+//         borderRadius: 12,
+//         fontSize: 12,
+//         zIndex: 1000,
+//         pointerEvents: "none",
+//       }}
+//     >
+//       {display}
+//     </div>
+//   );
+// }
+
+
+// Config: minimum score (0..1) to display when a numeric score is present.
+// If score === 0 we still display (useful for labels-only responses).
+const EMOTION_DISPLAY_MIN_SCORE = 0.12;
+
+function normalizeLabel(raw) {
+  if (!raw && raw !== 0) return "";
+  const s = String(raw).trim().toLowerCase();
+  // replace underscores and multiple spaces with single space
+  return s.replace(/[_\s]+/g, " ").trim();
+}
+
+function titleCaseLabel(label) {
+  if (!label) return "";
+  return label
+    .split(" ")
+    .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
+    .join(" ");
+}
+
+function normalizeScore(rawScore) {
+  if (rawScore == null || Number.isNaN(Number(rawScore))) return null;
+  const n = Number(rawScore);
+  // if server sends 0..100, convert to 0..1
+  if (n > 1 && n <= 100) return Math.min(1, n / 100);
+  // if it's absurdly >100, clamp to 1
+  if (n > 100) return 1;
+  // otherwise assume 0..1
+  return Math.max(0, Math.min(1, n));
+}
+
 function formatTopEmotion(emotion) {
-  if (!emotion) return null;
+  if (emotion == null) return null;
   try {
-    // 1) explicit top object { top: { label, score } }
-    if (emotion.top && emotion.top.label) {
-      return { label: String(emotion.top.label).toLowerCase(), score: Number(emotion.top.score) || 0 };
+    // 0) plain string label
+    if (typeof emotion === "string") {
+      const label = normalizeLabel(emotion);
+      return { label, score: 0 };
+    }
+
+    // 0b) array of entries like [{label,score}, ...] or [["label", score], ...]
+    if (Array.isArray(emotion) && emotion.length) {
+      const mapped = emotion
+        .map((e) => {
+          if (!e) return null;
+          if (Array.isArray(e) && e.length >= 1) {
+            return [normalizeLabel(e[0]), normalizeScore(e[1]) ?? 0];
+          }
+          if (typeof e === "object") {
+            const lbl = e.label ?? e.name ?? null;
+            const sc = e.score ?? e.confidence ?? e.probability ?? 0;
+            if (lbl) return [normalizeLabel(lbl), normalizeScore(sc) ?? 0];
+          }
+          if (typeof e === "string") return [normalizeLabel(e), 0];
+          return null;
+        })
+        .filter(Boolean);
+      if (mapped.length) {
+        mapped.sort((a, b) => (b[1] || 0) - (a[1] || 0));
+        return { label: mapped[0][0], score: mapped[0][1] || 0 };
+      }
+    }
+
+    // 1) explicit top object { top: { label, score } } or top: [{...}, {...}]
+    if (emotion.top) {
+      if (Array.isArray(emotion.top) && emotion.top.length) {
+        const t = emotion.top[0];
+        if (t) {
+          if (typeof t === "string") return { label: normalizeLabel(t), score: 0 };
+          if (typeof t === "object" && (t.label || t.name)) {
+            return { label: normalizeLabel(t.label ?? t.name), score: normalizeScore(t.score ?? t.confidence ?? 0) ?? 0 };
+          }
+        }
+      } else if (typeof emotion.top === "object" && (emotion.top.label || emotion.top.name)) {
+        return { label: normalizeLabel(emotion.top.label ?? emotion.top.name), score: normalizeScore(emotion.top.score ?? emotion.top.confidence ?? 0) ?? 0 };
+      } else if (typeof emotion.top === "string") {
+        return { label: normalizeLabel(emotion.top), score: 0 };
+      }
     }
 
     // 2) summary object (server might send that shape)
     if (emotion.summary && typeof emotion.summary === "object") {
-      const entries = Object.entries(emotion.summary).filter(([k, v]) => typeof v === "number");
+      const entries = Object.entries(emotion.summary).filter(([k, v]) => typeof v === "number" || !Number.isNaN(Number(v)));
       if (entries.length) {
-        entries.sort((a, b) => b[1] - a[1]);
-        return { label: String(entries[0][0]).toLowerCase(), score: Number(entries[0][1]) || 0 };
+        entries.sort((a, b) => Number(b[1]) - Number(a[1]));
+        return { label: normalizeLabel(entries[0][0]), score: normalizeScore(entries[0][1]) ?? 0 };
       }
     }
 
     // 3) common nested probability shapes
-    const nestedKeys = ["emotion_probs", "scores", "probs", "probabilities", "results"];
+    const nestedKeys = ["emotion_probs", "scores", "probs", "probabilities", "results", "emotionScores", "emotion_scores"];
     for (const nk of nestedKeys) {
       const nested = emotion[nk];
       if (nested && typeof nested === "object") {
-        const entries = Object.entries(nested).filter(([k, v]) => typeof v === "number");
+        const entries = Object.entries(nested).filter(([k, v]) => typeof v === "number" || !Number.isNaN(Number(v)));
         if (entries.length) {
-          entries.sort((a, b) => b[1] - a[1]);
-          return { label: String(entries[0][0]).toLowerCase(), score: Number(entries[0][1]) || 0 };
+          entries.sort((a, b) => Number(b[1]) - Number(a[1]));
+          return { label: normalizeLabel(entries[0][0]), score: normalizeScore(entries[0][1]) ?? 0 };
         }
       }
     }
 
-    // 4) fallback: top-level numeric entries — but ignore meta/internal keys (very important)
+    // 4) fallback: top-level numeric entries — but ignore meta/internal keys
     const isMetaKey = (k) =>
       k.startsWith("__") ||
-      ["anomaly_score", "anomalyFlag", "anomaly_flag", "timestamp", "ts", "time", "frameTime"].includes(k);
-    const entries = Object.entries(emotion).filter(([k, v]) => typeof v === "number" && !isMetaKey(k));
-    if (entries.length) {
-      entries.sort((a, b) => b[1] - a[1]);
-      return { label: String(entries[0][0]).toLowerCase(), score: Number(entries[0][1]) || 0 };
+      ["anomaly_score", "anomalyFlag", "anomaly_flag", "timestamp", "ts", "time", "frameTime", "name", "displayName"].includes(k);
+    const topLevelEntries = Object.entries(emotion).filter(([k, v]) => (typeof v === "number" || !Number.isNaN(Number(v))) && !isMetaKey(k));
+    if (topLevelEntries.length) {
+      topLevelEntries.sort((a, b) => Number(b[1]) - Number(a[1]));
+      return { label: normalizeLabel(topLevelEntries[0][0]), score: normalizeScore(topLevelEntries[0][1]) ?? 0 };
     }
 
-    // 5) emotion is a plain string label
-    if (typeof emotion === "string") return { label: emotion.toLowerCase(), score: 0 };
+    // 5) last resort: object with a 'label' or 'name' property
+    if (typeof emotion === "object") {
+      const lbl = emotion.label ?? emotion.name ?? emotion.displayName ?? null;
+      const sc = emotion.score ?? emotion.confidence ?? emotion.probability ?? null;
+      if (lbl) {
+        return { label: normalizeLabel(lbl), score: normalizeScore(sc) ?? 0 };
+      }
+    }
 
     return null;
   } catch (err) {
@@ -2305,33 +2752,64 @@ const EMOJI_MAP = {
   disgust: "🤢",
   fear: "😨",
   happy: "😄",
+  joy: "😄",
+  happiness: "😄",
   neutral: "😐",
   sad: "😢",
-  joy: "😄",
+  sorrow: "😢",
   surprise: "😮",
+  surprised: "😮",
   contempt: "😒",
+  // catch-alls
+  bored: "😒",
+  excited: "🤩",
+  calm: "😌",
 };
 
 function getTopEmotionLabel(emotion) {
   const top = formatTopEmotion(emotion);
+  if (!top) return null;
+
+  // if score > 0, only show if above threshold; if score === 0 (label-only) allow
+  const score = typeof top.score === "number" ? top.score : 0;
+  if (score > 0 && score < EMOTION_DISPLAY_MIN_SCORE) return null;
+
   return top ? String(top.label).toLowerCase() : null;
 }
 
 function renderEmojiLabelForEmotion(emotion) {
-  const label = getTopEmotionLabel(emotion);
+  const top = formatTopEmotion(emotion);
+  if (!top || !top.label) return null;
+
+  const label = normalizeLabel(top.label);
   if (!label) return null;
+
   const emoji = EMOJI_MAP[label] || "🫥";
-  const labelCap = label.charAt(0).toUpperCase() + label.slice(1);
-  return `${emoji} ${labelCap}`;
+  const displayLabel = titleCaseLabel(label);
+
+  // compute percent display when we have a numeric score > 0
+  let percent = null;
+  if (typeof top.score === "number") {
+    const norm = normalizeScore(top.score);
+    if (norm != null && norm > 0) {
+      percent = Math.round(norm * 100);
+    }
+  }
+
+  return percent ? `${emoji} ${displayLabel} (${percent}%)` : `${emoji} ${displayLabel}`;
 }
 
-  function renderEmotionBadgeForId(participantId) {
+function renderEmotionBadgeForId(participantId) {
   const em = emotionsMap[participantId];
   if (!em) return null;
+
   const display = renderEmojiLabelForEmotion(em);
   if (!display) return null;
+
   return (
     <div
+      role="img"
+      aria-label={`Emotion: ${display}`}
       style={{
         position: "absolute",
         right: 8,
@@ -2343,6 +2821,7 @@ function renderEmojiLabelForEmotion(emotion) {
         fontSize: 12,
         zIndex: 1000,
         pointerEvents: "none",
+        whiteSpace: "nowrap",
       }}
     >
       {display}
