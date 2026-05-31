@@ -12,6 +12,7 @@ import {
     findTranscriptByCode,
     listTranscriptDocs,
 } from "../data-access/transcript.repository.js";
+import { TranscriptRequest } from "../models/transcriptRequest.model.js";
 
 const TRANSCRIPT_MAX_TEXT_LENGTH = parseInt(process.env.TRANSCRIPT_MAX_TEXT_LENGTH || "500000", 10);
 const TRANSCRIPT_CACHE_TTL_SEC = parseInt(process.env.TRANSCRIPT_CACHE_TTL_SEC || "300", 10);
@@ -150,16 +151,12 @@ function normalizeName(n) {
 }
 
 function buildSpeakerLiveMap(segments, emotionData, emotionNames) {
-    // Collect display names from emotionNames
     const pidToName = {};
     for (const [pid, name] of Object.entries(emotionNames)) {
         pidToName[pid] = String(name || pid);
     }
 
-    // Collect unique Whisper speaker labels from segments
     const whisperLabels = [...new Set(segments.map((s) => s.speaker).filter(Boolean))];
-
-    // Build per-pid live timeline
     const pidTimelines = {};
     for (const [pid, history] of Object.entries(emotionData)) {
         if (!Array.isArray(history)) continue;
@@ -174,18 +171,15 @@ function buildSpeakerLiveMap(segments, emotionData, emotionNames) {
             .sort((a, b) => a.tSec - b.tSec);
     }
 
-    // Attempt name-based matching: Whisper label → pid
-    // Whisper may use actual display names if the diarization was name-aware,
-    // or generic SPEAKER_00 labels. We try both exact and prefix match.
     const whisperToPid = {};
     for (const wLabel of whisperLabels) {
         const wNorm = normalizeName(wLabel);
         let matched = null;
-        // Exact normalized match
+
         for (const [pid, name] of Object.entries(pidToName)) {
             if (normalizeName(name) === wNorm) { matched = pid; break; }
         }
-        // Prefix match (e.g. whisper "daf" matches "dafname")
+
         if (!matched) {
             for (const [pid, name] of Object.entries(pidToName)) {
                 const nNorm = normalizeName(name);
@@ -208,12 +202,10 @@ function buildGroqPrompt(segments, emotionData = {}, emotionNames = {}) {
         const segEnd = s.end ?? (segStart + 5);
         const whisperLabel = s.speaker || "Unknown";
 
-        // Find matched pid for this whisper speaker
         const matchedPid = whisperToPid[whisperLabel] ?? null;
 
         let liveTag = "";
         if (matchedPid && pidTimelines[matchedPid]) {
-            // Only show live emotions from THIS speaker's timeline in this window
             const events = pidTimelines[matchedPid].filter((e) => e.tSec >= segStart && e.tSec <= segEnd);
             if (events.length) {
                 liveTag = ` | live=[${events.map((e) =>
@@ -221,7 +213,7 @@ function buildGroqPrompt(segments, emotionData = {}, emotionNames = {}) {
                 ).join("; ")}]`;
             }
         } else if (!matchedPid && hasLiveData) {
-            // No name match — show all participants' live emotions with names so Groq can reason
+
             const allEvents = Object.entries(pidTimelines).flatMap(([pid, events]) =>
                 events
                     .filter((e) => e.tSec >= segStart && e.tSec <= segEnd)
@@ -408,7 +400,6 @@ export async function updateAiSummaryService(req) {
             { new: true }
         ).lean();
 
-        // Invalidate cache
         await Promise.all([
             safeRedisDel(RKEYS.cacheById(String(doc._id))),
             safeRedisDel(RKEYS.cacheByCode(String(doc.meetingCode))),
@@ -559,12 +550,23 @@ export async function getTranscriptService(req) {
         if (cached !== null) {
             const doc = JSON.parse(cached);
             if (doc === null) return { status: 404, body: { success: false, message: "Transcript not found" } };
-            if (!isAuthorized(doc, userId, secretHash)) return {
-                status: 403, body: {
-                    success: false,
-                    message: "Not authorized"
+            if (!isAuthorized(doc, userId, secretHash)) {
+                let grantedByRequest = false;
+                if (userId && doc.meetingCode) {
+                    const approved = await TranscriptRequest.findOne({
+                        meetingCode: doc.meetingCode,
+                        requesterId: userId,
+                        status: "approved",
+                    }).lean();
+                    grantedByRequest = !!approved;
                 }
-            };
+                if (!grantedByRequest) return {
+                    status: 403, body: {
+                        success: false,
+                        message: "Not authorized"
+                    }
+                };
+            }
             await incr(RKEYS.metricCached());
 
             log.info("cache hit", { key: cacheKey });
@@ -597,13 +599,24 @@ export async function getTranscriptService(req) {
         }
 
         if (!isAuthorized(doc, userId, secretHash)) {
-            return {
-                status: 403,
-                body: {
-                    success: false,
-                    message: "Not authorized"
-                }
-            };
+            let grantedByRequest = false;
+            if (userId && doc.meetingCode) {
+                const approved = await TranscriptRequest.findOne({
+                    meetingCode: doc.meetingCode,
+                    requesterId: userId,
+                    status: "approved",
+                }).lean();
+                grantedByRequest = !!approved;
+            }
+            if (!grantedByRequest) {
+                return {
+                    status: 403,
+                    body: {
+                        success: false,
+                        message: "Not authorized"
+                    }
+                };
+            }
         }
 
         const payload = JSON.stringify(doc);
@@ -675,7 +688,42 @@ export async function listTranscriptsService(req) {
 
     try {
         const dbStart = Date.now();
-        const docs = await listTranscriptDocs({ query, meetingCode: meetingCodeFilter, limit: finalLimit });
+
+        let approvedCodes = [];
+        if (userId) {
+            const approved = await TranscriptRequest.find(
+                { requesterId: userId, status: "approved" },
+                { meetingCode: 1 }
+            ).lean();
+            approvedCodes = approved.map((r) => r.meetingCode);
+        }
+
+        let docs;
+        if (approvedCodes.length > 0) {
+            const ownedQuery = meetingCodeFilter
+                ? { ...query, meetingCode: meetingCodeFilter }
+                : query;
+            const grantedQuery = meetingCodeFilter
+                ? { meetingCode: { $in: approvedCodes.filter((c) => c === meetingCodeFilter) } }
+                : { meetingCode: { $in: approvedCodes } };
+
+            const [ownedDocs, grantedDocs] = await Promise.all([
+                listTranscriptDocs({ query: ownedQuery, limit: finalLimit }),
+                listTranscriptDocs({ query: grantedQuery, limit: finalLimit }),
+            ]);
+
+            const seen = new Set();
+            docs = [];
+            for (const d of [...ownedDocs, ...grantedDocs]) {
+                const key = String(d._id || d.meetingCode);
+                if (!seen.has(key)) { seen.add(key); docs.push(d); }
+            }
+            docs.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+            docs = docs.slice(0, finalLimit);
+        } else {
+            docs = await listTranscriptDocs({ query, meetingCode: meetingCodeFilter, limit: finalLimit });
+        }
+
         log.info("listTranscripts complete", { count: docs.length, dbMs: Date.now() - dbStart });
         return {
             status: 200, body: {

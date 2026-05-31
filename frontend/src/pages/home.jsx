@@ -1,17 +1,60 @@
 import React, { useEffect, useState, useContext, useRef, useCallback } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
+import io from "socket.io-client";
 import "../styles/home.css";
+import "../styles/history.css";
 import { AuthContext } from "../contexts/AuthContext";
 import { TRANSCRIPTS_ENABLED } from "../environment";
 import TranscriptViewer from "./TranscriptViewer";
+import HistoryPanel from "./history";
 
 const SERVER_BASE = process.env.REACT_APP_SERVER_URL || "http://localhost:8000";
 const API_BASE = process.env.REACT_APP_API_URL || `${SERVER_BASE}/api/v1`;
+const SOCKET_SERVER_URL = process.env.REACT_APP_SOCKET_URL || SERVER_BASE;
 
 const TRANSCRIPT_CACHE_KEY = "tx_cache";
 const TRANSCRIPT_CACHE_TTL = 2 * 60 * 1000;
 const TRANSCRIPTS_PER_PAGE = 5;
 const PENDING_TRANSCRIPT_KEY = "pending_transcript_code";
+const PARTICIPANT_MEETINGS_KEY = "participant_meetings";
+
+async function fetchJSON(url, options = {}) {
+  const token = localStorage.getItem("token");
+  const headers = { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}), ...options.headers };
+  const res = await fetch(url, { ...options, headers });
+  const data = await res.json();
+  return { ok: res.ok, status: res.status, data };
+}
+
+async function submitTranscriptRequest(meetingCode) {
+  return fetchJSON(`${API_BASE}/transcript-requests`, {
+    method: "POST",
+    body: JSON.stringify({ meetingCode }),
+  });
+}
+
+async function resolveTranscriptRequest(requestId, status) {
+  return fetchJSON(`${API_BASE}/transcript-requests/${requestId}/resolve`, {
+    method: "PATCH",
+    body: JSON.stringify({ status }),
+  });
+}
+
+async function loadHostPendingRequests() {
+  return fetchJSON(`${API_BASE}/transcript-requests/host?status=pending`);
+}
+
+async function loadMyRequests() {
+  return fetchJSON(`${API_BASE}/transcript-requests/mine`);
+}
+
+async function loadOwnedRooms() {
+  return fetchJSON(`${API_BASE}/rooms/mine`);
+}
+
+async function loadParticipatedMeetings() {
+  return fetchJSON(`${API_BASE}/users/get_all_activity`);
+}
 
 async function copyToClipboard(text) {
   try {
@@ -52,9 +95,7 @@ async function createRoomAndGetLink(name) {
   const code = roomCode.toUpperCase();
   const link = `${window.location.origin}/room/${code}`;
 
-  if (!hostSecret) {
-    throw new Error("Server did not return a hostSecret");
-  }
+  if (!hostSecret) throw new Error("Server did not return a hostSecret");
 
   localStorage.setItem("displayName", name.trim());
   localStorage.setItem(
@@ -104,6 +145,7 @@ function normalizeTranscript(t) {
   return {
     _id: t._id || t.id || null,
     meetingCode: code,
+    hostId: t.hostId || t.host_id || null,
     transcriptText: t.transcriptText || t.transcript || t.metadata?.transcriptText || "",
     fileName: t.fileName || null,
     metadata: t.metadata || {},
@@ -167,9 +209,8 @@ const EMOTION_COLORS = {
   disgust: "#fb923c", neutral: "#64748b",
 };
 
-function TranscriptItem({ t, onOpen }) {
+function TranscriptItem({ t, onOpen, requestStatus, onRequest, isOwned: isOwnedProp }) {
   const segments = t.metadata?.segments ?? [];
-
   const speakers = [...new Set(segments.map((s) => s.speaker).filter(Boolean))];
 
   const emoCount = {};
@@ -192,6 +233,7 @@ function TranscriptItem({ t, onOpen }) {
     : (t.transcriptText || "").trim().slice(0, 140);
 
   const dominantSpeaker = speakers[0] || null;
+  const isOwned = isOwnedProp !== undefined ? isOwnedProp : !!localStorage.getItem(`host:${t.meetingCode}`);
 
   return (
     <div
@@ -202,7 +244,6 @@ function TranscriptItem({ t, onOpen }) {
       onKeyDown={(e) => e.key === "Enter" && onOpen()}
     >
       <div className="hm-tx-v2-bar" style={{ background: emoColor || "rgba(56,189,248,0.4)" }} />
-
       <div className="hm-tx-v2-content">
         <div className="hm-tx-v2-top">
           <div className="hm-tx-v2-code">{t.meetingCode}</div>
@@ -212,13 +253,11 @@ function TranscriptItem({ t, onOpen }) {
             {dominantSpeaker && <span className="hm-tx-v2-chip">{dominantSpeaker}</span>}
           </div>
         </div>
-
         {preview && (
           <div className="hm-tx-v2-preview">
             {preview}{preview.length >= 140 ? "…" : ""}
           </div>
         )}
-
         <div className="hm-tx-v2-bottom">
           <span className="hm-tx-v2-date">
             {t.createdAt ? new Date(t.createdAt).toLocaleString(undefined, {
@@ -230,12 +269,25 @@ function TranscriptItem({ t, onOpen }) {
               {dominantEmo}
             </span>
           )}
-          <span className="hm-tx-v2-open">
-            View transcript
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-              <path d="M5 12h14M12 5l7 7-7 7" />
-            </svg>
-          </span>
+          {!isOwned && requestStatus === "approved" && (
+            <span className="hm-tx-v2-open">
+              <span className="hm-txreq-badge hm-txreq-badge-requested">Requested Transcript</span>
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                <path d="M5 12h14M12 5l7 7-7 7" />
+              </svg>
+            </span>
+          )}
+          {!isOwned && requestStatus === "pending" && (
+            <span className="hm-txreq-badge hm-txreq-badge-pending">Request sent</span>
+          )}
+          {isOwned && (
+            <span className="hm-tx-v2-open">
+              View transcript
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                <path d="M5 12h14M12 5l7 7-7 7" />
+              </svg>
+            </span>
+          )}
         </div>
       </div>
     </div>
@@ -270,10 +322,661 @@ function ProcessingTranscriptCard({ meetingCode }) {
   );
 }
 
+const EMOTION_COLORS_MAP = {
+  joy: "#f59e0b", happy: "#f59e0b", sadness: "#60a5fa",
+  anger: "#f87171", fear: "#a78bfa", surprise: "#34d399",
+  disgust: "#fb923c", neutral: "#64748b",
+};
+const EMOTION_ICONS = {
+  joy: "✦", happy: "✦", sadness: "◈", anger: "◆",
+  fear: "◉", surprise: "◎", disgust: "◇", neutral: "○",
+};
+function emoColor(e) { return EMOTION_COLORS_MAP[(e || "neutral").toLowerCase()] || "#64748b"; }
+function emoIcon(e) { return EMOTION_ICONS[(e || "neutral").toLowerCase()] || "○"; }
+function fmtSec(sec = 0) {
+  const m = Math.floor(sec / 60), s = Math.floor(sec % 60);
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+function ActivityPanel({ transcripts, onShowTranscripts }) {
+  const allSegments = transcripts.flatMap(t => t.metadata?.segments ?? []);
+
+  const totalSecs = transcripts.reduce((acc, t) => {
+    const segs = t.metadata?.segments ?? [];
+    const last = segs.at(-1);
+    return acc + (last?.end > 0 ? Math.floor(last.end) : 0);
+  }, 0);
+  const totalMins = Math.floor(totalSecs / 60);
+  const totalHrs = Math.floor(totalMins / 60);
+  const displayTime = totalHrs > 0 ? `${totalHrs}h ${totalMins % 60}m` : totalMins > 0 ? `${totalMins}m` : totalSecs > 0 ? `${totalSecs}s` : "—";
+
+  const allSpeakers = new Set(allSegments.map(s => s.speaker).filter(Boolean));
+
+  const summarisedTx = transcripts.filter(t => t.aiSummary?.insights);
+  const hasSummaries = summarisedTx.length > 0;
+
+  const aiEmoAgg = {};
+  summarisedTx.forEach(t => {
+    const dist = t.aiSummary.insights.emotion_distribution || {};
+    Object.entries(dist).forEach(([k, v]) => {
+      const key = k.toLowerCase();
+      aiEmoAgg[key] = (aiEmoAgg[key] || 0) + Number(v);
+    });
+  });
+  const aiEmoTotal = Object.values(aiEmoAgg).reduce((a, b) => a + b, 0);
+  const aiEmoEntries = Object.entries(aiEmoAgg).sort((a, b) => b[1] - a[1]).slice(0, 6);
+
+  const liveEmoAgg = {};
+  allSegments.forEach(s => {
+    const e = (s.emotion || "neutral").toLowerCase();
+    liveEmoAgg[e] = (liveEmoAgg[e] || 0) + 1;
+  });
+  const liveEmoTotal = Object.values(liveEmoAgg).reduce((a, b) => a + b, 0);
+
+  const allDiscrepancies = summarisedTx.flatMap(t =>
+    (t.aiSummary.insights.discrepancies || []).map(d => ({
+      ...d,
+      meetingCode: t.meetingCode,
+      meetingDate: t.createdAt,
+    }))
+  ).slice(0, 6);
+
+  const topicCount = {};
+  summarisedTx.forEach(t => {
+    (t.aiSummary.insights.top_topics || []).forEach(topic => {
+      topicCount[topic] = (topicCount[topic] || 0) + 1;
+    });
+  });
+  const topTopics = Object.entries(topicCount).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([t]) => t);
+
+  const paceValues = summarisedTx.map(t => t.aiSummary.insights.speaking_pace_wpm).filter(Boolean);
+  const avgPace = paceValues.length ? Math.round(paceValues.reduce((a, b) => a + b, 0) / paceValues.length) : null;
+  const totalWords = summarisedTx.reduce((acc, t) => acc + (t.aiSummary.insights.total_words || 0), 0);
+
+  const allMoments = summarisedTx.flatMap(t =>
+    (t.aiSummary.insights.emotional_moments || []).map(m => ({
+      ...m,
+      meetingCode: t.meetingCode,
+    }))
+  ).filter(m => m.emotion?.toLowerCase() !== "neutral").slice(0, 4);
+
+  const hasData = transcripts.length > 0;
+
+  return (
+    <div className="hm-card hm-activity-panel">
+      <div className="hm-card-header">
+        <div>
+          <div className="hm-card-title">Your activity</div>
+          <div className="hm-card-sub">
+            {hasSummaries
+              ? `AI insights from ${summarisedTx.length} of ${transcripts.length} meeting${transcripts.length !== 1 ? "s" : ""}`
+              : "Insights from your meetings"}
+          </div>
+        </div>
+        {hasData && (
+          <button className="hm-tx-badge hm-activity-tx-btn" onClick={onShowTranscripts} title="View transcripts">
+            {transcripts.length} meeting{transcripts.length !== 1 ? "s" : ""}
+          </button>
+        )}
+      </div>
+
+      <div className="hm-divider" />
+
+      {!hasData ? (
+        <div className="hm-activity-empty">
+          <div className="hm-activity-empty-orb" aria-hidden>
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="rgba(59,130,246,0.5)" strokeWidth="1.3" strokeLinecap="round">
+              <circle cx="12" cy="12" r="10" /><path d="M12 8v4l3 3" />
+            </svg>
+          </div>
+          <p className="hm-activity-empty-title">No activity yet</p>
+          <p className="hm-activity-empty-sub">Host your first meeting to see insights here.</p>
+        </div>
+      ) : (
+        <div className="hm-activity-body">
+
+          <div className="hm-activity-stats-row">
+            <div className="hm-activity-stat">
+              <span className="hm-activity-stat-val">{transcripts.length}</span>
+              <span className="hm-activity-stat-label">meetings</span>
+            </div>
+            <div className="hm-activity-stat-divider" />
+            <div className="hm-activity-stat">
+              <span className="hm-activity-stat-val">{displayTime}</span>
+              <span className="hm-activity-stat-label">talk time</span>
+            </div>
+            <div className="hm-activity-stat-divider" />
+            {totalWords > 0 ? (
+              <div className="hm-activity-stat">
+                <span className="hm-activity-stat-val">{totalWords >= 1000 ? `${(totalWords / 1000).toFixed(1)}k` : totalWords}</span>
+                <span className="hm-activity-stat-label">words spoken</span>
+              </div>
+            ) : (
+              <div className="hm-activity-stat">
+                <span className="hm-activity-stat-val">{allSpeakers.size || "—"}</span>
+                <span className="hm-activity-stat-label">speakers</span>
+              </div>
+            )}
+            {avgPace && (
+              <>
+                <div className="hm-activity-stat-divider" />
+                <div className="hm-activity-stat">
+                  <span className="hm-activity-stat-val">{avgPace}</span>
+                  <span className="hm-activity-stat-label">wpm avg</span>
+                </div>
+              </>
+            )}
+          </div>
+
+          {hasSummaries && aiEmoEntries.length > 0 && liveEmoTotal > 0 ? (
+            <div className="hm-activity-section">
+              <div className="hm-activity-section-label-row">
+                <span className="hm-activity-section-label">Emotion — NLP vs Live capture</span>
+                <span className="hm-activity-emo-source-hint">NLP · Live</span>
+              </div>
+              <div className="hm-activity-dual-emo">
+                {aiEmoEntries.map(([emo, aiVal]) => {
+                  const aiPct = Math.round((aiVal / aiEmoTotal) * 100);
+                  const livePct = Math.round(((liveEmoAgg[emo] || 0) / liveEmoTotal) * 100);
+                  const color = emoColor(emo);
+                  const delta = livePct - aiPct;
+                  return (
+                    <div key={emo} className="hm-activity-dual-row">
+                      <div className="hm-activity-dual-label">
+                        <span className="hm-activity-dual-icon" style={{ color }}>{emoIcon(emo)}</span>
+                        <span style={{ textTransform: "capitalize", color }}>{emo}</span>
+                      </div>
+                      <div className="hm-activity-dual-bars">
+                        <div className="hm-activity-dual-bar-track" title={`NLP: ${aiPct}%`}>
+                          <div className="hm-activity-dual-bar-fill hm-activity-dual-bar-ai"
+                            style={{ width: `${aiPct}%`, background: color + "99" }} />
+                          <span className="hm-activity-dual-bar-val">{aiPct}%</span>
+                        </div>
+                        <div className="hm-activity-dual-bar-track" title={`Live: ${livePct}%`}>
+                          <div className="hm-activity-dual-bar-fill hm-activity-dual-bar-live"
+                            style={{ width: `${livePct}%`, background: color }} />
+                          <span className="hm-activity-dual-bar-val">{livePct}%</span>
+                        </div>
+                      </div>
+                      {Math.abs(delta) >= 8 && (
+                        <span className="hm-activity-dual-delta" style={{ color: delta > 0 ? color : "var(--text-3)" }}>
+                          {delta > 0 ? `+${delta}` : delta}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="hm-activity-emo-key-row">
+                <span className="hm-activity-emo-key-item hm-activity-emo-key-ai">
+                  <span className="hm-activity-emo-key-swatch hm-activity-emo-key-swatch-ai" />
+                  NLP
+                </span>
+                <span className="hm-activity-emo-key-item">
+                  <span className="hm-activity-emo-key-swatch hm-activity-emo-key-swatch-live" />
+                  Live camera
+                </span>
+              </div>
+            </div>
+          ) : (
+            liveEmoTotal > 0 && (() => {
+              const entries = Object.entries(liveEmoAgg).sort((a, b) => b[1] - a[1]).slice(0, 5);
+              return (
+                <div className="hm-activity-section">
+                  <div className="hm-activity-section-label">Live mood — across meetings</div>
+                  <div className="hm-activity-emo-bar">
+                    {entries.map(([emo, count]) => (
+                      <div key={emo} className="hm-activity-emo-seg"
+                        style={{ width: `${(count / liveEmoTotal) * 100}%`, background: emoColor(emo) }}
+                        title={`${emo}: ${Math.round((count / liveEmoTotal) * 100)}%`} />
+                    ))}
+                  </div>
+                  <div className="hm-activity-emo-legend">
+                    {entries.map(([emo, count]) => (
+                      <div key={emo} className="hm-activity-emo-legend-item">
+                        <div className="hm-activity-emo-dot" style={{ background: emoColor(emo) }} />
+                        <span style={{ textTransform: "capitalize" }}>{emo}</span>
+                        <span className="hm-activity-emo-pct">{Math.round((count / liveEmoTotal) * 100)}%</span>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="hm-activity-no-ai-hint">Generate AI summaries to unlock deeper emotion analysis.</p>
+                </div>
+              );
+            })()
+          )}
+
+          {allDiscrepancies.length > 0 && (
+            <div className="hm-activity-section">
+              <div className="hm-activity-section-label-row">
+                <span className="hm-activity-section-label">Emotion mismatches</span>
+                <span className="hm-activity-section-badge">{allDiscrepancies.length}</span>
+              </div>
+              <div className="hm-activity-disc-list">
+                {allDiscrepancies.map((d, i) => {
+                  const nlpColor = emoColor(d.nlp_emotion);
+                  const liveColor = emoColor(d.live_emotion);
+                  return (
+                    <div key={i} className="hm-activity-disc-item">
+                      <div className="hm-activity-disc-header">
+                        <span className="hm-activity-disc-speaker">{d.participant}</span>
+                        <span className="hm-activity-disc-time">{fmtSec(d.at_sec)}</span>
+                        <span className="hm-activity-disc-code">{d.meetingCode}</span>
+                      </div>
+                      <div className="hm-activity-disc-said">"{d.said?.length > 60 ? d.said.slice(0, 60) + "…" : d.said}"</div>
+                      <div className="hm-activity-disc-tags">
+                        <span className="hm-activity-disc-tag" style={{ color: nlpColor, borderColor: nlpColor + "44", background: nlpColor + "11" }}>
+                          {emoIcon(d.nlp_emotion)} speech: {d.nlp_emotion}
+                        </span>
+                        <span className="hm-activity-disc-arrow">→</span>
+                        <span className="hm-activity-disc-tag" style={{ color: liveColor, borderColor: liveColor + "44", background: liveColor + "11" }}>
+                          {emoIcon(d.live_emotion)} live: {d.live_emotion}
+                        </span>
+                      </div>
+                      {d.note && <div className="hm-activity-disc-note">{d.note}</div>}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {allMoments.length > 0 && (
+            <div className="hm-activity-section">
+              <div className="hm-activity-section-label">Notable moments</div>
+              <div className="hm-activity-moments">
+                {allMoments.map((m, i) => {
+                  const color = emoColor(m.emotion);
+                  return (
+                    <div key={i} className="hm-activity-moment-item" style={{ borderLeftColor: color }}>
+                      <div className="hm-activity-moment-meta">
+                        <span style={{ color, fontSize: "0.65rem", fontWeight: 600, textTransform: "capitalize" }}>
+                          {emoIcon(m.emotion)} {m.emotion}
+                        </span>
+                        <span className="hm-activity-moment-code">{m.meetingCode} · {fmtSec(m.start)}</span>
+                      </div>
+                      <div className="hm-activity-moment-text">
+                        "{m.text?.length > 80 ? m.text.slice(0, 80) + "…" : m.text}"
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {topTopics.length > 0 && (
+            <div className="hm-activity-section">
+              <div className="hm-activity-section-label">Topics discussed</div>
+              <div className="hm-activity-topics">
+                {topTopics.map((topic, i) => (
+                  <span key={i} className="hm-activity-topic-tag" style={{ opacity: 1 - i * 0.07 }}>
+                    {topic}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <button className="hm-activity-tx-cta" onClick={onShowTranscripts}>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <path d="M9 12h6M9 16h6M7 4H5a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2V6a2 2 0 00-2-2h-2" />
+              <path d="M15 2H9a1 1 0 00-1 1v2a1 1 0 001 1h6a1 1 0 001-1V3a1 1 0 00-1-1z" />
+            </svg>
+            View transcripts
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+              <path d="M5 12h14M12 5l7 7-7 7" />
+            </svg>
+          </button>
+
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RequestTranscriptPanel({ participatedMeetings, myRequests, onRequestSent }) {
+  const [manualCode, setManualCode] = React.useState("");
+  const [submitting, setSubmitting] = React.useState({});
+  const [submitted, setSubmitted] = React.useState({});
+
+  const participantMeetings = (participatedMeetings || []).filter(
+    (m) => !localStorage.getItem(`host:${(m.meetingCode || "").toUpperCase()}`)
+  );
+
+  function getStatus(meetingCode) {
+    const req = (myRequests || []).find(
+      (r) => r.meetingCode?.toUpperCase() === meetingCode?.toUpperCase()
+    );
+    return req?.status || null;
+  }
+
+  async function handleRequest(code) {
+    const c = code.trim().toUpperCase();
+    if (!c) return;
+    setSubmitting((p) => ({ ...p, [c]: true }));
+    try {
+      const { ok, data } = await submitTranscriptRequest(c);
+      if (ok || data?.status === "pending" || data?.status === "approved") {
+        setSubmitted((p) => ({ ...p, [c]: data?.status || "pending" }));
+        if (typeof onRequestSent === "function") onRequestSent(c, data?.status || "pending");
+      } else {
+        setSubmitted((p) => ({ ...p, [c]: "error" }));
+        setTimeout(() => setSubmitted((p) => { const n = { ...p }; delete n[c]; return n; }), 3000);
+      }
+    } catch {
+      setSubmitted((p) => ({ ...p, [c]: "error" }));
+      setTimeout(() => setSubmitted((p) => { const n = { ...p }; delete n[c]; return n; }), 3000);
+    } finally {
+      setSubmitting((p) => { const n = { ...p }; delete n[c]; return n; });
+    }
+  }
+
+  async function handleManualSubmit() {
+    const c = manualCode.trim().toUpperCase();
+    if (!c) return;
+    await handleRequest(c);
+    setManualCode("");
+  }
+
+  function StatusBadge({ code }) {
+    const serverStatus = getStatus(code);
+    const localStatus = submitted[code];
+    const status = localStatus || serverStatus;
+    if (!status) return null;
+    if (status === "approved") return (
+      <span className="hm-txreq-badge hm-txreq-badge-approved">
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><polyline points="20 6 9 17 4 12" /></svg>
+        Approved
+      </span>
+    );
+    if (status === "pending") return (
+      <span className="hm-txreq-badge hm-txreq-badge-pending">
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4" /></svg>
+        Pending
+      </span>
+    );
+    if (status === "denied") return (
+      <span className="hm-txreq-badge hm-txreq-badge-denied">
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12" /></svg>
+        Denied
+      </span>
+    );
+    if (status === "error") return <span className="hm-txreq-badge hm-txreq-badge-denied">Failed</span>;
+    return null;
+  }
+
+  return (
+    <div className="hm-card hm-req-transcript-panel">
+      <div className="hm-card-header">
+        <div>
+          <div className="hm-card-title">Request Transcript</div>
+          <div className="hm-card-sub">Ask the host for access to a meeting transcript</div>
+        </div>
+      </div>
+      <div className="hm-divider" />
+
+      <div className="hm-req-tx-manual">
+        <div className="hm-field">
+          <label htmlFor="hm-req-tx-code">Meeting code</label>
+          <div className="hm-req-tx-input-row">
+            <input
+              id="hm-req-tx-code"
+              type="text"
+              value={manualCode}
+              onChange={(e) => setManualCode(e.target.value.toUpperCase())}
+              onKeyDown={(e) => e.key === "Enter" && handleManualSubmit()}
+              placeholder="e.g. XKCD42"
+              maxLength={32}
+            />
+            <button
+              className="hm-txreq-btn"
+              onClick={handleManualSubmit}
+              disabled={!manualCode.trim() || submitting[manualCode.trim().toUpperCase()]}
+            >
+              {submitting[manualCode.trim().toUpperCase()] ? "Sending…" : "Request"}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {participantMeetings.length > 0 && (
+        <>
+          <div className="hm-req-tx-section-label">Meetings you attended</div>
+          <div className="hm-txreq-list">
+            {participantMeetings.map((m) => {
+              const code = (m.meetingCode || "").toUpperCase();
+              const status = getStatus(code) || submitted[code];
+              const isLoading = !!submitting[code];
+              const canRequest = !status || status === "denied";
+              return (
+                <div key={code} className="hm-txreq-item">
+                  <div className="hm-txreq-item-info">
+                    <div className="hm-txreq-item-name">{code}</div>
+                    <div className="hm-txreq-item-meta">
+                      {m.createdAt && (
+                        <span className="hm-txreq-item-time">
+                          {new Date(m.createdAt).toLocaleString(undefined, { month: "short", day: "numeric" })}
+                        </span>
+                      )}
+                      {m.hostName && (
+                        <><span className="hm-txreq-item-dot" /><span className="hm-txreq-item-time">Host: {m.hostName}</span></>
+                      )}
+                    </div>
+                  </div>
+                  <div className="hm-txreq-item-actions">
+                    {canRequest ? (
+                      <button
+                        className={`hm-txreq-btn${isLoading ? " hm-txreq-btn-loading" : ""}`}
+                        onClick={() => handleRequest(code)}
+                        disabled={isLoading}
+                      >
+                        {isLoading ? "Sending…" : status === "denied" ? "Re-request" : "Request"}
+                      </button>
+                    ) : (
+                      <StatusBadge code={code} />
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+
+      {participantMeetings.length === 0 && (
+        <div className="hm-tx-empty">
+          <div className="hm-tx-empty-icon" aria-hidden>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#64748b" strokeWidth="1.5" strokeLinecap="round">
+              <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75" />
+            </svg>
+          </div>
+          <p>No participated meetings found. Join a meeting first, or enter a code above.</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TranscriptRequestButton({ meetingCode, onDone }) {
+  const [state, setState] = React.useState("idle");
+
+  async function handleRequest() {
+    setState("loading");
+    try {
+      const { ok, data } = await submitTranscriptRequest(meetingCode);
+      if (ok) {
+        setState("sent");
+        if (typeof onDone === "function") onDone("sent");
+      } else if (data?.status === "approved") {
+        setState("approved");
+      } else if (data?.status === "pending") {
+        setState("sent");
+      } else {
+        setState("error");
+        setTimeout(() => setState("idle"), 3000);
+      }
+    } catch {
+      setState("error");
+      setTimeout(() => setState("idle"), 3000);
+    }
+  }
+
+  if (state === "sent") {
+    return (
+      <span className="hm-txreq-badge hm-txreq-badge-pending">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+          <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4" />
+        </svg>
+        Request sent
+      </span>
+    );
+  }
+
+  if (state === "approved") {
+    return (
+      <span className="hm-txreq-badge hm-txreq-badge-approved">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+          <polyline points="20 6 9 17 4 12" />
+        </svg>
+        Approved
+      </span>
+    );
+  }
+
+  return (
+    <button
+      className={`hm-txreq-btn ${state === "loading" ? "hm-txreq-btn-loading" : ""} ${state === "error" ? "hm-txreq-btn-error" : ""}`}
+      onClick={handleRequest}
+      disabled={state === "loading"}
+      title={state === "error" ? "Request failed — try again" : "Ask host for transcript access"}
+    >
+      {state === "error" ? (
+        <>
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+            <path d="M18 6L6 18M6 6l12 12" />
+          </svg>
+          Failed
+        </>
+      ) : (
+        <>
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+            <path d="M9 12h6M9 16h6M7 4H5a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2V6a2 2 0 00-2-2h-2" />
+            <path d="M15 2H9a1 1 0 00-1 1v2a1 1 0 001 1h6a1 1 0 001-1V3a1 1 0 00-1-1z" />
+          </svg>
+          {state === "loading" ? "Requesting…" : "Request transcript"}
+        </>
+      )}
+    </button>
+  );
+}
+
+function TranscriptRequestPanel({ requests, onResolve, loading }) {
+  const [resolving, setResolving] = React.useState({});
+
+  async function handleResolve(requestId, status) {
+    setResolving((prev) => ({ ...prev, [requestId]: status }));
+    try {
+      await onResolve(requestId, status);
+    } finally {
+      setResolving((prev) => { const n = { ...prev }; delete n[requestId]; return n; });
+    }
+  }
+
+  if (!loading && requests.length === 0) return null;
+
+  return (
+    <div className="hm-card hm-txreq-panel">
+      <div className="hm-card-header">
+        <div>
+          <div className="hm-card-title">Transcript requests</div>
+          <div className="hm-card-sub">Participants asking for access to your meeting transcripts</div>
+        </div>
+        {requests.length > 0 && (
+          <span className="hm-txreq-count-badge">{requests.length}</span>
+        )}
+      </div>
+      <div className="hm-divider" />
+      {loading ? (
+        <div className="hm-tx-loading"><div className="hm-tx-loading-dots"><span /><span /><span /></div></div>
+      ) : (
+        <div className="hm-txreq-list">
+          {requests.map((req) => (
+            <div key={req._id} className="hm-txreq-item">
+              <div className="hm-txreq-item-info">
+                <div className="hm-txreq-item-name">{req.requesterName}</div>
+                <div className="hm-txreq-item-meta">
+                  <span className="hm-txreq-item-code">{req.meetingCode}</span>
+                  <span className="hm-txreq-item-dot" />
+                  <span className="hm-txreq-item-time">
+                    {req.createdAt ? new Date(req.createdAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : ""}
+                  </span>
+                </div>
+              </div>
+              <div className="hm-txreq-item-actions">
+                <button
+                  className="hm-txreq-approve-btn"
+                  disabled={!!resolving[req._id]}
+                  onClick={() => handleResolve(req._id, "approved")}
+                >
+                  {resolving[req._id] === "approved" ? "…" : (
+                    <>
+                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                        <polyline points="20 6 9 17 4 12" />
+                      </svg>
+                      Approve
+                    </>
+                  )}
+                </button>
+                <button
+                  className="hm-txreq-deny-btn"
+                  disabled={!!resolving[req._id]}
+                  onClick={() => handleResolve(req._id, "denied")}
+                >
+                  {resolving[req._id] === "denied" ? "…" : (
+                    <>
+                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                        <path d="M18 6L6 18M6 6l12 12" />
+                      </svg>
+                      Deny
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TranscriptRequestBanner({ requests, onClose }) {
+  if (!requests || requests.length === 0) return null;
+  const req = requests[0];
+  return (
+    <div className="hm-txreq-banner" role="alert" aria-live="polite">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
+        <path d="M9 12h6M9 16h6M7 4H5a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2V6a2 2 0 00-2-2h-2" />
+        <path d="M15 2H9a1 1 0 00-1 1v2a1 1 0 001 1h6a1 1 0 001-1V3a1 1 0 00-1-1z" />
+      </svg>
+      <span>
+        <strong>{req.requesterName}</strong> requested transcript for <strong>{req.meetingCode}</strong>
+        {requests.length > 1 ? ` (+${requests.length - 1} more)` : ""}
+      </span>
+      <button className="hm-txreq-banner-close" onClick={onClose} aria-label="Dismiss">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+          <path d="M18 6L6 18M6 6l12 12" />
+        </svg>
+      </button>
+    </div>
+  );
+}
+
 export default function Home() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { logout } = useContext(AuthContext);
+  const { logout, getHistoryOfUser, userData, authLoading } = useContext(AuthContext);
 
   const [name, setName] = useState(localStorage.getItem("displayName") || "");
   const [room, setRoom] = useState("");
@@ -287,12 +990,29 @@ export default function Home() {
   const [pendingTranscriptCode, setPendingTranscriptCode] = useState(() =>
     localStorage.getItem(PENDING_TRANSCRIPT_KEY) || null
   );
+  const [rightPanel, setRightPanel] = useState("activity");
+  const [pendingRequests, setPendingRequests] = useState([]);
+  const [reqsLoading, setReqsLoading] = useState(false);
+  const [bannerRequests, setBannerRequests] = useState([]);
+  const [myRequests, setMyRequests] = useState([]);
+  const [currentUserId, setCurrentUserId] = useState(null);
+  const [reqUpdateSnack, setReqUpdateSnack] = useState(null);
+  const [isHostUser, setIsHostUser] = useState(() => {
+    try {
+      return Object.keys(localStorage).some((k) => {
+        if (!k.startsWith("host:")) return false;
+        try { return !!JSON.parse(localStorage.getItem(k))?.hostSecret; } catch { return false; }
+      });
+    } catch { return false; }
+  });
+  const [participatedMeetings, setParticipatedMeetings] = useState([]);
 
   const isFetchingRef = useRef(false);
   const prevCountRef = useRef(0);
   const pollTimerRef = useRef(null);
   const pollAttemptsRef = useRef(0);
   const txListRef = useRef(null);
+  const txCardRef = useRef(null);
 
   const loadTranscripts = useCallback(async (bustCache = false) => {
     if (!TRANSCRIPTS_ENABLED) return null;
@@ -382,7 +1102,6 @@ export default function Home() {
 
       try {
         const fresh = await loadTranscripts(true);
-
         if (fresh) {
           const found = fresh.find(
             (t) => t.meetingCode?.toUpperCase() === meetingCode?.toUpperCase()
@@ -403,30 +1122,70 @@ export default function Home() {
         pollTimerRef.current = setTimeout(poll, getDelay(attempt));
       } else {
         stopPolling();
-        showSnack(
-          "Transcript unavailable — please contact support if this persists.",
-          "error"
-        );
+        showSnack("Transcript unavailable — please contact support if this persists.", "error");
       }
     };
 
     pollTimerRef.current = setTimeout(poll, getDelay(0));
   }, [loadTranscripts, stopPolling]);
 
+  useEffect(() => { cleanInvalidHosts(); }, []);
   useEffect(() => {
-    cleanInvalidHosts();
+    try {
+      const token = localStorage.getItem("token");
+      if (token) {
+        const payload = JSON.parse(atob(token.split(".")[1]));
+        setCurrentUserId(payload?.id || payload?.sub || payload?._id || null);
+      }
+    } catch { }
   }, []);
 
   useEffect(() => {
-    loadTranscripts();
-  }, [loadTranscripts]);
+    loadOwnedRooms()
+      .then(({ ok, data }) => {
+        if (ok && Array.isArray(data?.rooms) && data.rooms.length > 0) {
+          setIsHostUser(true);
+        }
+      })
+      .catch(() => { });
+  }, []);
 
+  useEffect(() => {
+    loadParticipatedMeetings()
+      .then(({ ok, data }) => {
+        if (ok && Array.isArray(data?.meetings)) {
+          setParticipatedMeetings(data.meetings);
+        }
+      })
+      .catch(() => { });
+  }, []);
+  useEffect(() => { loadTranscripts(); }, [loadTranscripts]);
+
+  useEffect(() => {
+    setReqsLoading(true);
+    loadHostPendingRequests()
+      .then(({ ok, data }) => {
+        if (ok && data?.requests && data.requests.length > 0) {
+          setIsHostUser(true);
+          setPendingRequests(data.requests);
+        }
+      })
+      .catch(() => { })
+      .finally(() => setReqsLoading(false));
+  }, []);
+
+  useEffect(() => {
+    loadMyRequests()
+      .then(({ ok, data }) => {
+        if (ok && data?.requests) setMyRequests(data.requests);
+      })
+      .catch(() => { });
+  }, []);
   useEffect(() => {
     const handleFocus = () => loadTranscripts(true);
     window.addEventListener("focus", handleFocus);
     return () => window.removeEventListener("focus", handleFocus);
   }, [loadTranscripts]);
-
   useEffect(() => {
     const state = location.state;
     if (state?.meetingEnded && state?.meetingCode) {
@@ -434,26 +1193,84 @@ export default function Home() {
       window.history.replaceState({}, "", window.location.pathname);
     }
   }, [location.state, startPollingForTranscript]);
-
   useEffect(() => {
     const pending = localStorage.getItem(PENDING_TRANSCRIPT_KEY);
-    if (pending && TRANSCRIPTS_ENABLED) {
-      startPollingForTranscript(pending);
-    }
+    if (pending && TRANSCRIPTS_ENABLED) startPollingForTranscript(pending);
   }, [startPollingForTranscript]);
-
-  useEffect(() => {
-    return () => stopPolling();
-  }, [stopPolling]);
-
+  useEffect(() => { return () => stopPolling(); }, [stopPolling]);
   useEffect(() => {
     const el = txListRef.current;
     if (!el || visibleCount <= TRANSCRIPTS_PER_PAGE) return;
     const fourthItem = el.children[3];
-    if (fourthItem) {
-      el.scrollTop = fourthItem.offsetTop - el.offsetTop;
-    }
+    if (fourthItem) el.scrollTop = fourthItem.offsetTop - el.offsetTop;
   }, [visibleCount]);
+
+  const handleTranscriptRequestReceived = React.useCallback((payload) => {
+    setPendingRequests((prev) => {
+      if (prev.some((r) => r._id === payload.requestId)) return prev;
+      return [{ _id: payload.requestId, meetingCode: payload.meetingCode, requesterName: payload.requesterName, requesterId: payload.requesterId, status: "pending", createdAt: new Date().toISOString() }, ...prev];
+    });
+    setBannerRequests((prev) => {
+      if (prev.some((r) => r._id === payload.requestId)) return prev;
+      return [{ _id: payload.requestId, meetingCode: payload.meetingCode, requesterName: payload.requesterName }, ...prev];
+    });
+  }, []);
+
+  const handleTranscriptRequestUpdate = React.useCallback((payload) => {
+    setMyRequests((prev) =>
+      prev.map((r) => r._id === payload.requestId ? { ...r, status: payload.status } : r)
+    );
+    if (payload.status === "approved") {
+      showSnack(`Transcript access approved for meeting ${payload.meetingCode}!`, "success");
+      loadTranscripts(true);
+    } else if (payload.status === "denied") {
+      showSnack(`Transcript request denied for meeting ${payload.meetingCode}.`, "error");
+    }
+  }, [loadTranscripts]);
+
+  useEffect(() => {
+    const socket = io(SOCKET_SERVER_URL, { autoConnect: false });
+
+    const onConnect = () => {
+      try {
+        const token = localStorage.getItem("token") || localStorage.getItem("accessToken");
+        let userId = null;
+        if (token) {
+          try {
+            const payload = JSON.parse(atob(token.split(".")[1]));
+            userId = payload._id || payload.sub || payload.id;
+          } catch { }
+        }
+        if (!userId) userId = localStorage.getItem("userId");
+        if (userId) socket.data = { ...socket.data, userId };
+        socket.emit("home-presence", { userId });
+      } catch { }
+    };
+
+    socket.on("connect", onConnect);
+    socket.on("transcript-request-received", handleTranscriptRequestReceived);
+    socket.on("transcript-request-update", handleTranscriptRequestUpdate);
+
+    socket.connect();
+
+    return () => {
+      socket.off("connect", onConnect);
+      socket.off("transcript-request-received", handleTranscriptRequestReceived);
+      socket.off("transcript-request-update", handleTranscriptRequestUpdate);
+      socket.disconnect();
+    };
+  }, [handleTranscriptRequestReceived, handleTranscriptRequestUpdate]);
+
+  async function handleResolveRequest(requestId, status) {
+    const { ok, data } = await resolveTranscriptRequest(requestId, status);
+    if (ok) {
+      setPendingRequests((prev) => prev.filter((r) => r._id !== requestId));
+      setBannerRequests((prev) => prev.filter((r) => r._id !== requestId));
+      showSnack(status === "approved" ? "Request approved." : "Request denied.", status === "approved" ? "success" : "error");
+    } else {
+      showSnack(data?.message || "Failed to resolve request.", "error");
+    }
+  }
 
   function showSnack(message, severity = "success") {
     setSnackMsg(message);
@@ -524,222 +1341,333 @@ export default function Home() {
   const hasMore = visibleCount < dedupedTranscripts.length;
   const hiddenCount = dedupedTranscripts.length - visibleCount;
 
+  const allSegments = dedupedTranscripts.flatMap(t => t.metadata?.segments ?? []);
+  const emoCount = {};
+  allSegments.forEach(s => { const e = (s.emotion || "neutral").toLowerCase(); emoCount[e] = (emoCount[e] || 0) + 1; });
+  const dominantEmo = Object.entries(emoCount).sort((a, b) => b[1] - a[1])[0]?.[0] || null;
+  const EMO_COLORS = { joy: "#f59e0b", happy: "#f59e0b", sadness: "#60a5fa", anger: "#f87171", fear: "#a78bfa", surprise: "#34d399", disgust: "#fb923c", neutral: "#64748b" };
+  const dominantEmoColor = dominantEmo ? (EMO_COLORS[dominantEmo] || "#64748b") : null;
+
+  const lastMeeting = dedupedTranscripts[0];
+  const lastMeetingDate = lastMeeting?.createdAt
+    ? new Date(lastMeeting.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })
+    : null;
+
   return (
     <div className="hm-root">
       <div className="hm-bg" aria-hidden />
 
-      <header className="hm-topbar">
-        <div className="hm-brand" onClick={() => navigate("/")}>
-          <img src="/logo.svg" alt="Hoovik" width="32" height="32" />
+      <aside className="hm-sidebar">
+        <div className="hm-sidebar-brand" onClick={() => navigate("/")}>
+          <img src="/logo.svg" alt="Hoovik" width="24" height="24" />
           <span className="hm-brand-name">Hoovik</span>
         </div>
-        <div className="hm-topbar-right">
-          <button className="hm-icon-btn" onClick={() => navigate("/history")} title="History" aria-label="Open history">
-            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+
+        <nav className="hm-sidebar-nav">
+          <button className={`hm-sidebar-nav-item ${rightPanel === "activity" ? "hm-sidebar-nav-active" : ""}`} aria-current={rightPanel === "activity" ? "page" : undefined} onClick={() => setRightPanel("activity")}>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" />
+            </svg>
+            Home
+          </button>
+          <button className={`hm-sidebar-nav-item ${rightPanel === "history" ? "hm-sidebar-nav-active" : ""}`} aria-current={rightPanel === "history" ? "page" : undefined} onClick={() => setRightPanel("history")}>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
               <path d="M3 3v5h5" /><path d="M21 12a9 9 0 1 1-9-9" /><path d="M12 7v6l4 2" />
             </svg>
+            History
           </button>
-          <button className="hm-logout-btn" onClick={handleLogout} aria-label="Sign out">Sign out</button>
-        </div>
-      </header>
+          <button className={`hm-sidebar-nav-item ${rightPanel === "transcripts" ? "hm-sidebar-nav-active" : ""}`} aria-current={rightPanel === "transcripts" ? "page" : undefined} onClick={() => setRightPanel("transcripts")}>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M9 12h6M9 16h6M7 4H5a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2V6a2 2 0 00-2-2h-2" />
+              <path d="M15 2H9a1 1 0 00-1 1v2a1 1 0 001 1h6a1 1 0 001-1V3a1 1 0 00-1-1z" />
+            </svg>
+            Transcripts
+          </button>
+          <button className={`hm-sidebar-nav-item ${rightPanel === "request-transcript" ? "hm-sidebar-nav-active" : ""}`} aria-current={rightPanel === "request-transcript" ? "page" : undefined} onClick={() => setRightPanel("request-transcript")}>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <circle cx="12" cy="12" r="10" /><path d="M12 8v4M12 16h.01" />
+            </svg>
+            Request Transcript
+          </button>
+        </nav>
 
-      <div className="hm-welcome">
-        <div className="hm-welcome-avatar" aria-hidden>{displayInitial}</div>
-        <div className="hm-welcome-text">
-          <h2>Welcome back{name ? `, ${name.split(" ")[0]}` : ""}!</h2>
-          <p>Ready to connect? Create or join a room below.</p>
-        </div>
-      </div>
+        {TRANSCRIPTS_ENABLED && (
+          <>
+            <div className="hm-sidebar-stats-title">Overview</div>
+            <div className="hm-sidebar-stats">
+              <div className="hm-stat-tile">
+                <span className="hm-stat-tile-label">Meetings</span>
+                <span className="hm-stat-tile-val">{dedupedTranscripts.length}</span>
+              </div>
+              {lastMeetingDate && (
+                <div className="hm-stat-tile">
+                  <span className="hm-stat-tile-label">Last meeting</span>
+                  <span className="hm-stat-tile-val">{lastMeetingDate}</span>
+                </div>
+              )}
+              {dominantEmo && (
+                <div className="hm-stat-tile">
+                  <span className="hm-stat-tile-label">Overall mood</span>
+                  <div className="hm-stat-emo-row">
+                    <div className="hm-stat-emo-dot" style={{ background: dominantEmoColor }} />
+                    <span className="hm-stat-tile-val" style={{ color: dominantEmoColor, textTransform: "capitalize" }}>{dominantEmo}</span>
+                  </div>
+                </div>
+              )}
+            </div>
+          </>
+        )}
 
-      <div className="hm-grid">
-        <div className="hm-left">
-          <div className="hm-card">
-            <div className="hm-card-header">
-              <div>
-                <div className="hm-card-title">Create a room</div>
-                <div className="hm-card-sub">Host a new meeting instantly</div>
+        <div className="hm-sidebar-spacer" />
+
+        <button className="hm-logout-btn" onClick={handleLogout} aria-label="Sign out">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden>
+            <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4" /><polyline points="16 17 21 12 16 7" /><line x1="21" y1="12" x2="9" y2="12" />
+          </svg>
+          Sign out
+        </button>
+      </aside>
+
+      <div className="hm-main-area">
+        <div className="hm-welcome">
+          <div className="hm-welcome-avatar" aria-hidden>{displayInitial}</div>
+          <div className="hm-welcome-text">
+            <h2>Welcome back{name ? `, ${name.split(" ")[0]}` : ""}!</h2>
+            <p>Ready to connect? Create or join a room below.</p>
+          </div>
+        </div>
+
+        {bannerRequests.length > 0 && (
+          <TranscriptRequestBanner
+            requests={bannerRequests}
+            onClose={() => setBannerRequests([])}
+          />
+        )}
+        <div className="hm-grid">
+          <div className="hm-left">
+            <div className="hm-card">
+              <div className="hm-card-header">
+                <div>
+                  <div className="hm-card-title">Create a room</div>
+                  <div className="hm-card-sub">Host a new meeting instantly</div>
+                </div>
+              </div>
+              <div className="hm-card-body">
+                <div className="hm-field">
+                  <label htmlFor="hm-name">Your display name</label>
+                  <input id="hm-name" type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Anupam Kumar" />
+                </div>
+                <div className="hm-btn-row">
+                  <button className="hm-btn-p" onClick={createRoom}>
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
+                      <path d="M15 10l4.553-2.069A1 1 0 0121 8.82v6.36a1 1 0 01-1.447.89L15 14M3 8a2 2 0 012-2h10a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z" />
+                    </svg>
+                    Start Meeting
+                  </button>
+                  <button className="hm-btn-g" onClick={copyLink}>
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden>
+                      <path d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
+                    </svg>
+                    Create &amp; Copy Link
+                  </button>
+                </div>
+                <div className="hm-tip-row">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" strokeWidth="2" strokeLinecap="round" aria-hidden>
+                    <circle cx="12" cy="12" r="10" /><path d="M12 16v-4M12 8h.01" />
+                  </svg>
+                  <span>Allow camera &amp; microphone when prompted. Share your link to invite others.</span>
+                </div>
               </div>
             </div>
-            <div className="hm-card-body">
-              <div className="hm-field">
-                <label htmlFor="hm-name">Your display name</label>
-                <input id="hm-name" type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Anupam Kumar" />
+            <div className="hm-card">
+              <div className="hm-card-header">
+                <div>
+                  <div className="hm-card-title">Join a room</div>
+                  <div className="hm-card-sub">Paste a code or full meeting link</div>
+                </div>
               </div>
-              <div className="hm-btn-row">
-                <button className="hm-btn-p" onClick={createRoom}>
+              <div className="hm-card-body">
+                <div className="hm-field">
+                  <label htmlFor="hm-room">Room code or link</label>
+                  <input
+                    id="hm-room" type="text" value={room}
+                    onChange={(e) => setRoom(e.target.value)}
+                    placeholder="e.g. XKCD42 or https://…"
+                    onKeyDown={(e) => e.key === "Enter" && joinRoom()}
+                  />
+                </div>
+                <button className="hm-btn-full" onClick={joinRoom}>
                   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
-                    <path d="M15 10l4.553-2.069A1 1 0 0121 8.82v6.36a1 1 0 01-1.447.89L15 14M3 8a2 2 0 012-2h10a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z" />
+                    <path d="M15 3h6v6M14 10l6.1-6.1M9 21H3v-6M10 14l-6.1 6.1" />
                   </svg>
-                  Start Meeting
-                </button>
-                <button className="hm-btn-g" onClick={copyLink}>
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden>
-                    <path d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
-                  </svg>
-                  Create &amp; Copy Link
+                  Join Room
                 </button>
               </div>
-              <div className="hm-tip-row">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" strokeWidth="2" strokeLinecap="round" aria-hidden>
-                  <circle cx="12" cy="12" r="10" /><path d="M12 16v-4M12 8h.01" />
-                </svg>
-                <span>Allow camera &amp; microphone when prompted. Share your link to invite others.</span>
-              </div>
             </div>
-          </div>
 
-          <div className="hm-card">
-            <div className="hm-card-header">
-              <div>
-                <div className="hm-card-title">Join a room</div>
-                <div className="hm-card-sub">Paste a code or full meeting link</div>
-              </div>
-            </div>
-            <div className="hm-card-body">
-              <div className="hm-field">
-                <label htmlFor="hm-room">Room code or link</label>
-                <input
-                  id="hm-room" type="text" value={room}
-                  onChange={(e) => setRoom(e.target.value)}
-                  placeholder="e.g. XKCD42 or https://…"
-                  onKeyDown={(e) => e.key === "Enter" && joinRoom()}
-                />
-              </div>
-              <button className="hm-btn-full" onClick={joinRoom}>
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
-                  <path d="M15 3h6v6M14 10l6.1-6.1M9 21H3v-6M10 14l-6.1 6.1" />
-                </svg>
-                Join Room
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <div className="hm-card hm-transcripts">
-          <div className="hm-card-header">
-            <div>
-              <div className="hm-card-title">Recent transcripts</div>
-              <div className="hm-card-sub">From your hosted meetings</div>
-            </div>
-            <div className="hm-tx-header-actions">
-              {dedupedTranscripts.length > 0 && (
-                <span className="hm-tx-badge">{dedupedTranscripts.length} meeting{dedupedTranscripts.length !== 1 ? "s" : ""}</span>
-              )}
-              <button
-                className={`hm-tx-refresh-btn ${txLoading ? "hm-tx-refresh-spinning" : ""}`}
-                onClick={() => loadTranscripts(true)}
-                title="Refresh transcripts"
-                aria-label="Refresh transcripts"
-                disabled={txLoading}
-              >
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
-                  <path d="M1 4v6h6" /><path d="M23 20v-6h-6" />
-                  <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15" />
-                </svg>
-              </button>
-            </div>
-          </div>
-
-          <div className="hm-divider" />
-
-          {!TRANSCRIPTS_ENABLED && (
-            <div className="hm-tx-notice hm-tx-notice-warn">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
-                <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
-                <line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" />
-              </svg>
-              <div>
-                <p>Transcript service unavailable on this build.</p>
-                <p className="hm-tx-notice-sub">Meetings still work — local recording runs in your browser.</p>
-              </div>
-            </div>
-          )}
-
-          {dedupedTranscripts.length === 0 && TRANSCRIPTS_ENABLED && !txLoading && (
-            <div className="hm-tx-empty">
-              <div className="hm-tx-empty-icon" aria-hidden>
-                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#64748b" strokeWidth="1.5" strokeLinecap="round">
-                  <path d="M9 12h6M9 16h6M7 4H5a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2V6a2 2 0 00-2-2h-2" />
-                  <path d="M15 2H9a1 1 0 00-1 1v2a1 1 0 001 1h6a1 1 0 001-1V3a1 1 0 00-1-1z" />
-                </svg>
-              </div>
-              <p>No transcripts yet — host a meeting and end it to generate one.</p>
-            </div>
-          )}
-
-          {txLoading && dedupedTranscripts.length === 0 && (
-            <div className="hm-tx-loading">
-              <div className="hm-tx-loading-dots">
-                <span /><span /><span />
-              </div>
-            </div>
-          )}
-
-          <div className="hm-tx-list" ref={txListRef}>
-            {/* [ADDED] Show processing card at top when transcript is being generated */}
-            {pendingTranscriptCode && TRANSCRIPTS_ENABLED && (
-              <ProcessingTranscriptCard meetingCode={pendingTranscriptCode} />
+            {(pendingRequests.length > 0 || reqsLoading) && (
+              <TranscriptRequestPanel
+                requests={pendingRequests}
+                onResolve={handleResolveRequest}
+                loading={reqsLoading}
+              />
             )}
-            {visibleTranscripts.map((t, i) => {
-              const key = getTranscriptKey(t, i);
-              return (
-                <TranscriptItem
-                  key={key}
-                  t={t}
-                  onOpen={() => setViewingTranscript(t)}
-                />
-              );
-            })}
           </div>
 
-          {(hasMore || visibleCount > TRANSCRIPTS_PER_PAGE) && (
-            <div className="hm-tx-pagination">
-              {hasMore && (
-                <button
-                  className="hm-tx-load-more"
-                  onClick={() => setVisibleCount((v) => v + TRANSCRIPTS_PER_PAGE)}
-                >
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
-                    <path d="M6 9l6 6 6-6" />
+          {rightPanel === "activity" ? (
+            <ActivityPanel
+              transcripts={dedupedTranscripts}
+              onShowTranscripts={() => setRightPanel("transcripts")}
+            />
+          ) : rightPanel === "history" ? (
+            <HistoryPanel
+              getHistoryOfUser={getHistoryOfUser}
+              userData={userData}
+              authLoading={authLoading}
+            />
+          ) : rightPanel === "request-transcript" ? (
+            <RequestTranscriptPanel
+              participatedMeetings={participatedMeetings}
+              myRequests={myRequests}
+              onRequestSent={(code, status) => {
+                setMyRequests((prev) => {
+                  const existing = prev.find((r) => r.meetingCode?.toUpperCase() === code);
+                  if (existing) return prev.map((r) => r.meetingCode?.toUpperCase() === code ? { ...r, status } : r);
+                  return [{ meetingCode: code, status, createdAt: new Date().toISOString() }, ...prev];
+                });
+                showSnack(`Transcript request sent for ${code}.`, "success");
+              }}
+            />
+          ) : (
+            <div className="hm-card hm-transcripts" ref={txCardRef}>
+              <div className="hm-card-header">
+                <div>
+                  <div className="hm-card-title">Recent transcripts</div>
+                  <div className="hm-card-sub">From your hosted meetings</div>
+                </div>
+                <div className="hm-tx-header-actions">
+                  {dedupedTranscripts.length > 0 && (
+                    <span className="hm-tx-badge">{dedupedTranscripts.length} meeting{dedupedTranscripts.length !== 1 ? "s" : ""}</span>
+                  )}
+                  <button
+                    className={`hm-tx-refresh-btn ${txLoading ? "hm-tx-refresh-spinning" : ""}`}
+                    onClick={() => loadTranscripts(true)}
+                    title="Refresh transcripts"
+                    aria-label="Refresh transcripts"
+                    disabled={txLoading}
+                  >
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+                      <path d="M1 4v6h6" /><path d="M23 20v-6h-6" />
+                      <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+
+              <div className="hm-divider" />
+
+              {!TRANSCRIPTS_ENABLED && (
+                <div className="hm-tx-notice hm-tx-notice-warn">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
+                    <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                    <line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" />
                   </svg>
-                  Show {Math.min(hiddenCount, TRANSCRIPTS_PER_PAGE)} more
-                  <span className="hm-tx-remaining">({hiddenCount} remaining)</span>
-                </button>
+                  <div>
+                    <p>Transcript service unavailable on this build.</p>
+                    <p className="hm-tx-notice-sub">Meetings still work — local recording runs in your browser.</p>
+                  </div>
+                </div>
               )}
-              {visibleCount > TRANSCRIPTS_PER_PAGE && (
-                <button
-                  className="hm-tx-collapse"
-                  onClick={() => setVisibleCount(TRANSCRIPTS_PER_PAGE)}
-                >
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
-                    <path d="M18 15l-6-6-6 6" />
-                  </svg>
-                  Collapse
-                </button>
+
+              {dedupedTranscripts.length === 0 && TRANSCRIPTS_ENABLED && !txLoading && (
+                <div className="hm-tx-empty">
+                  <div className="hm-tx-empty-icon" aria-hidden>
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#64748b" strokeWidth="1.5" strokeLinecap="round">
+                      <path d="M9 12h6M9 16h6M7 4H5a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2V6a2 2 0 00-2-2h-2" />
+                      <path d="M15 2H9a1 1 0 00-1 1v2a1 1 0 001 1h6a1 1 0 001-1V3a1 1 0 00-1-1z" />
+                    </svg>
+                  </div>
+                  <p>No transcripts yet — host a meeting and end it to generate one.</p>
+                </div>
+              )}
+
+              {txLoading && dedupedTranscripts.length === 0 && (
+                <div className="hm-tx-loading">
+                  <div className="hm-tx-loading-dots">
+                    <span /><span /><span />
+                  </div>
+                </div>
+              )}
+
+              <div className="hm-tx-list" ref={txListRef}>
+                {pendingTranscriptCode && TRANSCRIPTS_ENABLED && (
+                  <ProcessingTranscriptCard meetingCode={pendingTranscriptCode} />
+                )}
+                {visibleTranscripts.map((t, i) => {
+                  const key = getTranscriptKey(t, i);
+                  const isOwned = (currentUserId && t.ownerId && t.ownerId.toString() === currentUserId.toString())
+                    || (currentUserId && t.hostId && t.hostId.toString() === currentUserId.toString())
+                    || !!localStorage.getItem(`host:${t.meetingCode}`);
+                  const myReq = !isOwned ? myRequests.find((r) => r.meetingCode === t.meetingCode) : null;
+                  return (
+                    <TranscriptItem
+                      key={key}
+                      t={t}
+                      onOpen={() => (isOwned || myReq?.status === "approved") ? setViewingTranscript(t) : undefined}
+                      requestStatus={myReq?.status}
+                      isOwned={isOwned}
+                    />
+                  );
+                })}
+              </div>
+
+              {(hasMore || visibleCount > TRANSCRIPTS_PER_PAGE) && (
+                <div className="hm-tx-pagination">
+                  {hasMore && (
+                    <button
+                      className="hm-tx-load-more"
+                      onClick={() => setVisibleCount((v) => v + TRANSCRIPTS_PER_PAGE)}
+                    >
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+                        <path d="M6 9l6 6 6-6" />
+                      </svg>
+                      Show {Math.min(hiddenCount, TRANSCRIPTS_PER_PAGE)} more
+                      <span className="hm-tx-remaining">({hiddenCount} remaining)</span>
+                    </button>
+                  )}
+                  {visibleCount > TRANSCRIPTS_PER_PAGE && (
+                    <button
+                      className="hm-tx-collapse"
+                      onClick={() => setVisibleCount(TRANSCRIPTS_PER_PAGE)}
+                    >
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+                        <path d="M18 15l-6-6-6 6" />
+                      </svg>
+                      Collapse
+                    </button>
+                  )}
+                </div>
               )}
             </div>
           )}
         </div>
+
+        <Snack msg={snackMsg} severity={snackSeverity} open={snackOpen} />
+
+        {viewingTranscript && (
+          <TranscriptViewer
+            t={viewingTranscript}
+            onClose={() => setViewingTranscript(null)}
+            onSummaryGenerated={(updated) => {
+              setTranscripts((prev) =>
+                prev.map((t) => t._id === updated._id ? { ...t, aiSummary: updated.aiSummary } : t)
+              );
+              setViewingTranscript((prev) => ({ ...prev, aiSummary: updated.aiSummary }));
+              sessionStorage.removeItem(TRANSCRIPT_CACHE_KEY);
+            }}
+          />
+        )}
       </div>
-
-      <Snack msg={snackMsg} severity={snackSeverity} open={snackOpen} />
-
-      {viewingTranscript && (
-        <TranscriptViewer
-          t={viewingTranscript}
-          onClose={() => setViewingTranscript(null)}
-          onSummaryGenerated={(updated) => {
-
-            setTranscripts((prev) =>
-              prev.map((t) => t._id === updated._id ? { ...t, aiSummary: updated.aiSummary } : t)
-            );
-
-            setViewingTranscript((prev) => ({ ...prev, aiSummary: updated.aiSummary }));
-
-            sessionStorage.removeItem(TRANSCRIPT_CACHE_KEY);
-          }}
-        />
-      )}
     </div>
   );
 }

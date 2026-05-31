@@ -63,17 +63,6 @@
     radial-gradient(ellipse 600px 500px at 110% 110%, rgba(77,159,255,0.035) 0%, transparent 65%);
 }
 
-.bgMesh::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background-image:
-    linear-gradient(rgba(255,255,255,0.008) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255,255,255,0.008) 1px, transparent 1px);
-  background-size: 60px 60px;
-  mask-image: radial-gradient(ellipse 70% 70% at 50% 50%, black 30%, transparent 100%);
-}
-
 .topBar {
   position: relative;
   z-index: 100;

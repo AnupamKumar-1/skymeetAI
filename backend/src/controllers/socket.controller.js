@@ -90,6 +90,55 @@ async function getHostSocketId(io, meetingCode) {
   }
 }
 
+let _io = null;
+
+export function getIo() {
+  return _io;
+}
+
+export async function notifyHostOfTranscriptRequest(meetingCode, requestPayload) {
+  if (!_io) return;
+  try {
+    const roomName = `meeting:${meetingCode}`;
+    const socketsInRoom = await _io.in(roomName).fetchSockets();
+    const hostSocket = socketsInRoom.find((s) => s.data?.isHost === true);
+    if (hostSocket) {
+      hostSocket.emit("transcript-request-received", requestPayload);
+      return;
+    }
+
+    const meeting = await Meeting.findOne({ meetingCode }).lean();
+    const hostUserId = (meeting?.ownerId || meeting?.hostId)?.toString();
+    if (!hostUserId) return;
+
+    const allSockets = await _io.fetchSockets();
+    const hostSockets = allSockets.filter((s) => s.data?.userId === hostUserId);
+    hostSockets.forEach((s) => s.emit("transcript-request-received", requestPayload));
+  } catch (err) {
+    log.error("notifyHostOfTranscriptRequest error", { err: err.message, meetingCode });
+  }
+}
+
+export async function notifyRequesterOfResolution(requesterSocketId, payload) {
+  if (!_io) return;
+  try {
+    _io.to(requesterSocketId).emit("transcript-request-update", payload);
+  } catch (err) {
+    log.error("notifyRequesterOfResolution error", { err: err.message });
+  }
+}
+
+export async function notifyUserOfResolution(userId, payload) {
+  if (!_io) return;
+  try {
+    const allSockets = await _io.fetchSockets();
+    const userSockets = allSockets.filter((s) => s.data?.userId === userId?.toString());
+    userSockets.forEach((s) => s.emit("transcript-request-update", payload));
+  } catch (err) {
+    log.error("notifyUserOfResolution error", { err: err.message });
+  }
+}
+
 export function connectToSocket(
   server,
   corsOptions = {
@@ -108,10 +157,15 @@ export function connectToSocket(
   });
 
   io.adapter(createAdapter(pubClient, subClient));
+  _io = io;
   mkdirp(UPLOAD_BASE).catch(() => { });
 
   io.on("connection", (socket) => {
     log.info("connected", { socketId: socket.id });
+
+    socket.on("home-presence", ({ userId } = {}) => {
+      if (userId) socket.data.userId = String(userId);
+    });
 
     socket.on("join-call", async (meetingCodeRaw, meta = {}) => {
       try {
@@ -238,8 +292,6 @@ export function connectToSocket(
           return;
         }
 
-        // Host leaving — clean up emotion state and treat as a normal leave.
-        // Do NOT broadcast end-meeting to participants; their meeting continues.
         await deleteEmotionState(code);
         const { userId } = socket.data || {};
         await handleLeave(socket, code, io, userId);

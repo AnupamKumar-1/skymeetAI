@@ -269,10 +269,34 @@ export default function useMeetingLifecycle({
                 onHostConfirmed?.();
               } else {
                 console.error("[declare-host] rejected by server:", ack?.reason);
+                if (API_BASE) {
+                  const token = localStorage.getItem("token");
+                  fetch(`${API_BASE}/users/meetings/${code}/participants`, {
+                    method: "POST",
+                    headers: {
+                      "Content-Type": "application/json",
+                      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                    },
+                    body: JSON.stringify({ name: displayName }),
+                  }).catch(() => { });
+                }
               }
             });
           }
         });
+      } else {
+  
+        if (API_BASE) {
+          const token = localStorage.getItem("token");
+          fetch(`${API_BASE}/users/meetings/${code}/participants`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            },
+            body: JSON.stringify({ name: displayName }),
+          }).catch(() => { });
+        }
       }
     } catch (err) {
       console.error(err);

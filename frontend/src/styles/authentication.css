@@ -47,14 +47,8 @@ html, body, #root {
     radial-gradient(ellipse 400px 300px at 60% 40%,   rgba(245, 158, 11, 0.03), transparent);
 }
 
-.au-bg::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background-image:
-    linear-gradient(rgba(255, 255, 255, 0.012) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.012) 1px, transparent 1px);
-  background-size: 48px 48px;
+.au-bg::after{
+  display: none;
 }
 
 .au-hero {

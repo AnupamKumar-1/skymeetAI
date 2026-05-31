@@ -26,6 +26,8 @@ export default function useSocket({
   socketReady,
   isHost,
   setEmotionLive,
+  onTranscriptRequestReceived,
+  onTranscriptRequestUpdate,
 }) {
   const h = useRef({});
 
@@ -52,6 +54,8 @@ export default function useSocket({
     makingOfferRef,
     isHost,
     setEmotionLive,
+    onTranscriptRequestReceived,
+    onTranscriptRequestUpdate,
   };
 
   useEffect(() => {
@@ -251,13 +255,26 @@ export default function useSocket({
 
     socket.on("end-meeting", onEndMeeting);
 
-    // Participant side - receive host's emotion-status broadcasts
     const onEmotionStatus = ({ active } = {}) => {
       if (!h.current.isHost && typeof h.current.setEmotionLive === "function") {
         h.current.setEmotionLive(Boolean(active));
       }
     };
     socket.on("emotion-status", onEmotionStatus);
+
+    const onTranscriptRequestReceived = (payload) => {
+      if (typeof h.current.onTranscriptRequestReceived === "function") {
+        h.current.onTranscriptRequestReceived(payload);
+      }
+    };
+    socket.on("transcript-request-received", onTranscriptRequestReceived);
+
+    const onTranscriptRequestUpdate = (payload) => {
+      if (typeof h.current.onTranscriptRequestUpdate === "function") {
+        h.current.onTranscriptRequestUpdate(payload);
+      }
+    };
+    socket.on("transcript-request-update", onTranscriptRequestUpdate);
 
     const onDisconnect = () => {
       if (disconnectTimer) return;
@@ -301,6 +318,8 @@ export default function useSocket({
       socket.off("disconnect", onDisconnect);
       socket.off("update-participant-state", onParticipantStateUpdate);
       socket.off("emotion-status", onEmotionStatus);
+      socket.off("transcript-request-received", onTranscriptRequestReceived);
+      socket.off("transcript-request-update", onTranscriptRequestUpdate);
     };
   }, [socketReady]);
 }

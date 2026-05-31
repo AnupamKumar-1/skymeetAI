@@ -9,6 +9,7 @@ import passport from "passport";
 import "../config/passport.js";
 import "./models/user.model.js";
 import "./models/meeting.model.js";
+import "./models/transcriptRequest.model.js";
 import userRoutes from "./routes/users.routes.js";
 import roomsRoutes from "./routes/rooms.js";
 import meetingsRoutes from "./routes/meetings.routes.js";
@@ -17,6 +18,7 @@ import { connectToSocket } from "./controllers/socket.controller.js";
 import { logout } from "./controllers/user.controller.js";
 import { connectRedis, redisPub, redisSub } from "./infra/redis.js";
 import transcriptProxyRoutes from "./routes/transcriptProxy.routes.js";
+import transcriptRequestRoutes from "./routes/transcriptRequests.routes.js";
 import { createProxyMiddleware } from "http-proxy-middleware";
 
 const app = express();
@@ -55,6 +57,7 @@ app.use("/api/v1/rooms", roomsRoutes);
 app.use("/api/v1/transcripts/proxy", transcriptProxyRoutes);
 app.use("/api/v1/transcripts", transcriptRoutes);
 app.use("/api/v1/meetings", meetingsRoutes);
+app.use("/api/v1/transcript-requests", transcriptRequestRoutes);
 
 app.post("/api/v1/auth/logout", logout);
 
