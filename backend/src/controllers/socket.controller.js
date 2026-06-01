@@ -277,7 +277,17 @@ export function connectToSocket(
 
     socket.on("get-emotion-status", async () => {
       const code = socket.data?.meetingCode;
-      if (!code) return;
+      if (!code) {
+        socket.once("join-call", () => {
+          setTimeout(async () => {
+            const c = socket.data?.meetingCode;
+            if (!c) return;
+            const active = await getEmotionState(c);
+            socket.emit("emotion-status", { active });
+          }, 200);
+        });
+        return;
+      }
       const active = await getEmotionState(code);
       socket.emit("emotion-status", { active });
     });

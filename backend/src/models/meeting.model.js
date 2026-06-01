@@ -56,7 +56,7 @@ const meetingSchema = new Schema(
       name: { type: String, trim: true, default: null },
     },
 
-    hostSecretHash: { type: String, default: null, index: true },
+    hostSecretHash: { type: String, default: null },
     hostSecretExpiresAt: { type: Date, default: null },
 
     participants: { type: [ParticipantSchema], default: [] },

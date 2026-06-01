@@ -9,7 +9,6 @@ const userScheme = new Schema(
     { timestamps: true }
 );
 
-userScheme.index({ username: 1 }, { unique: true });
 
 const User = mongoose.model("UserDb", userScheme);
 

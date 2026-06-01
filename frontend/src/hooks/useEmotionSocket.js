@@ -1,19 +1,23 @@
 import { useEffect, useRef, useCallback } from "react";
 import { io } from "socket.io-client";
 
+const EMOTION_URL =
+    process.env.REACT_APP_EMOTION_SOCKET_URL ||
+    process.env.REACT_APP_SERVER_URL ||
+    "http://localhost:8000";
+
+const VALID_EMOTIONS = new Set([
+    "angry", "fearful", "disgust", "happy", "sad", "neutral/calm", "neutral",
+]);
 
 export default function useEmotionSocket({ setEmotionsMap, updateParticipantMediaState }) {
-    const poolRef = useRef(new Map()); // pid → { socket, connected }
+    const poolRef = useRef(new Map());
     const setEmotionsMapRef = useRef(setEmotionsMap);
     const serverCapsRef = useRef({ targetFps: 5, suggestedFps: null, modalityStaleSec: 3 });
 
     useEffect(() => {
         setEmotionsMapRef.current = setEmotionsMap;
     }, [setEmotionsMap]);
-
-    const VALID_EMOTIONS = new Set([
-        "angry", "fearful", "disgust", "happy", "sad", "neutral/calm", "neutral",
-    ]);
 
     const handleEmotion = useCallback((payload) => {
         try {
@@ -56,35 +60,34 @@ export default function useEmotionSocket({ setEmotionsMap, updateParticipantMedi
         } catch (err) {
             console.error("[EmotionSocket] parse error:", err);
         }
-    }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    }, []);
 
-
-    function _createSocket(participantId) {
-        const socket = io(process.env.REACT_APP_EMOTION_SOCKET_URL, {
+    const _createSocket = useCallback((participantId) => {
+        const socket = io(EMOTION_URL, {
             path: "/socket.io",
             transports: ["websocket"],
             timeout: 20000,
             reconnection: true,
-            reconnectionAttempts: Infinity,
-            reconnectionDelay: 1000,
-            reconnectionDelayMax: 5000,
+            reconnectionAttempts: 5,
+            reconnectionDelay: 2000,
+            reconnectionDelayMax: 10000,
             auth: { participantId },
         });
 
         socket.on("connect", () => {
             const entry = poolRef.current.get(participantId);
             if (entry) entry.connected = true;
-            console.log(`[EmotionSocket] connected pid=${participantId} sid=${socket.id}`);
         });
 
         socket.on("connect_error", (err) => {
-            console.warn(`[EmotionSocket] connect_error pid=${participantId}:`, err.message);
+            const entry = poolRef.current.get(participantId);
+            if (entry) entry.connected = false;
+            console.warn(`[EmotionSocket] connect_error pid=${participantId}: ${err.message}`);
         });
 
         socket.on("disconnect", (reason) => {
             const entry = poolRef.current.get(participantId);
             if (entry) entry.connected = false;
-            console.warn(`[EmotionSocket] disconnected pid=${participantId}:`, reason);
         });
 
         socket.on("server.status", (payload) => {
@@ -96,14 +99,14 @@ export default function useEmotionSocket({ setEmotionsMap, updateParticipantMedi
                     serverCapsRef.current.suggestedFps = null;
                 }
                 if (staleSec > 0) serverCapsRef.current.modalityStaleSec = staleSec;
-            } catch { /* ignore */ }
+            } catch { }
         });
 
         socket.on("backpressure", (payload) => {
             try {
                 const suggested = Number(payload?.suggestedFps);
                 if (suggested > 0) serverCapsRef.current.suggestedFps = suggested;
-            } catch { /* ignore */ }
+            } catch { }
         });
 
         socket.on("emotion.error", (payload) => {
@@ -113,8 +116,7 @@ export default function useEmotionSocket({ setEmotionsMap, updateParticipantMedi
         socket.on("emotion.result", handleEmotion);
 
         return socket;
-    }
-
+    }, [handleEmotion]);
 
     const ensureSocket = useCallback((participantId) => {
         if (!participantId) return null;
@@ -124,9 +126,8 @@ export default function useEmotionSocket({ setEmotionsMap, updateParticipantMedi
         const socket = _createSocket(participantId);
         poolRef.current.set(participantId, { socket, connected: false });
         return socket;
-    }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    }, [_createSocket]);
 
-    /** Return existing socket (or null if not created). */
     const getSocketForParticipant = useCallback((participantId) => {
         return poolRef.current.get(participantId)?.socket ?? null;
     }, []);
@@ -137,23 +138,16 @@ export default function useEmotionSocket({ setEmotionsMap, updateParticipantMedi
         try {
             entry.socket.off("emotion.result", handleEmotion);
             entry.socket.disconnect();
-        } catch { /* ignore */ }
+        } catch { }
         poolRef.current.delete(participantId);
-        console.log(`[EmotionSocket] released pid=${participantId}`);
     }, [handleEmotion]);
 
-    /**
-
-     * @param {string}  participantId
-     * @param {{ micEnabled: boolean, cameraEnabled: boolean }} state
-     */
     const notifyMediaState = useCallback((participantId, { micEnabled, cameraEnabled }) => {
         if (!participantId) return;
 
         let socket = poolRef.current.get(participantId)?.socket ?? null;
 
         if (!socket?.connected) {
-
             for (const [, entry] of poolRef.current) {
                 if (entry?.socket?.connected) {
                     socket = entry.socket;
@@ -162,9 +156,7 @@ export default function useEmotionSocket({ setEmotionsMap, updateParticipantMedi
             }
         }
 
-        if (!socket?.connected) {
-            return;
-        }
+        if (!socket?.connected) return;
 
         socket.emit("participant.media_state", {
             participantId,
@@ -173,16 +165,12 @@ export default function useEmotionSocket({ setEmotionsMap, updateParticipantMedi
         });
 
         updateParticipantMediaState?.(participantId, { micEnabled, cameraEnabled });
+    }, [updateParticipantMediaState]);
 
-        console.log(
-            `[EmotionSocket] media_state pid=${participantId} mic=${micEnabled} cam=${cameraEnabled}`
-        );
-    }, []);
-
-    // Teardown all on unmount
     useEffect(() => {
+        const pool = poolRef.current;
         return () => {
-            for (const [pid] of poolRef.current) {
+            for (const [pid] of pool) {
                 releaseSocket(pid);
             }
         };

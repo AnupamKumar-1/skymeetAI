@@ -79,9 +79,6 @@ export default function useSocket({
       try {
         window.myId = socket.id;
       } catch { }
-      if (!h.current.isHost) {
-        socket.emit("get-emotion-status");
-      }
     };
 
     socket.on("connect", onConnect);
@@ -149,7 +146,12 @@ export default function useSocket({
     };
 
     socket.on("participants-updated", syncParticipants);
-    socket.on("existing-participants", syncParticipants);
+    socket.on("existing-participants", (list) => {
+      syncParticipants(list);
+      if (!h.current.isHost) {
+        socket.emit("get-emotion-status");
+      }
+    });
 
     const onParticipantStateUpdate = ({ peerId, muted }) => {
       if (!peerId) return;

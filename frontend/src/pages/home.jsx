@@ -7,6 +7,7 @@ import { AuthContext } from "../contexts/AuthContext";
 import { TRANSCRIPTS_ENABLED } from "../environment";
 import TranscriptViewer from "./TranscriptViewer";
 import HistoryPanel from "./history";
+import { useRag } from "../hooks/useRag";
 
 const SERVER_BASE = process.env.REACT_APP_SERVER_URL || "http://localhost:8000";
 const API_BASE = process.env.REACT_APP_API_URL || `${SERVER_BASE}/api/v1`;
@@ -16,7 +17,6 @@ const TRANSCRIPT_CACHE_KEY = "tx_cache";
 const TRANSCRIPT_CACHE_TTL = 2 * 60 * 1000;
 const TRANSCRIPTS_PER_PAGE = 5;
 const PENDING_TRANSCRIPT_KEY = "pending_transcript_code";
-const PARTICIPANT_MEETINGS_KEY = "participant_meetings";
 
 async function fetchJSON(url, options = {}) {
   const token = localStorage.getItem("token");
@@ -798,178 +798,471 @@ function RequestTranscriptPanel({ participatedMeetings, myRequests, onRequestSen
   );
 }
 
-function TranscriptRequestButton({ meetingCode, onDone }) {
-  const [state, setState] = React.useState("idle");
-
-  async function handleRequest() {
-    setState("loading");
-    try {
-      const { ok, data } = await submitTranscriptRequest(meetingCode);
-      if (ok) {
-        setState("sent");
-        if (typeof onDone === "function") onDone("sent");
-      } else if (data?.status === "approved") {
-        setState("approved");
-      } else if (data?.status === "pending") {
-        setState("sent");
-      } else {
-        setState("error");
-        setTimeout(() => setState("idle"), 3000);
-      }
-    } catch {
-      setState("error");
-      setTimeout(() => setState("idle"), 3000);
-    }
-  }
-
-  if (state === "sent") {
-    return (
-      <span className="hm-txreq-badge hm-txreq-badge-pending">
-        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-          <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4" />
-        </svg>
-        Request sent
-      </span>
-    );
-  }
-
-  if (state === "approved") {
-    return (
-      <span className="hm-txreq-badge hm-txreq-badge-approved">
-        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-          <polyline points="20 6 9 17 4 12" />
-        </svg>
-        Approved
-      </span>
-    );
-  }
-
-  return (
-    <button
-      className={`hm-txreq-btn ${state === "loading" ? "hm-txreq-btn-loading" : ""} ${state === "error" ? "hm-txreq-btn-error" : ""}`}
-      onClick={handleRequest}
-      disabled={state === "loading"}
-      title={state === "error" ? "Request failed — try again" : "Ask host for transcript access"}
-    >
-      {state === "error" ? (
-        <>
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-            <path d="M18 6L6 18M6 6l12 12" />
-          </svg>
-          Failed
-        </>
-      ) : (
-        <>
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-            <path d="M9 12h6M9 16h6M7 4H5a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2V6a2 2 0 00-2-2h-2" />
-            <path d="M15 2H9a1 1 0 00-1 1v2a1 1 0 001 1h6a1 1 0 001-1V3a1 1 0 00-1-1z" />
-          </svg>
-          {state === "loading" ? "Requesting…" : "Request transcript"}
-        </>
-      )}
-    </button>
-  );
-}
-
-function TranscriptRequestPanel({ requests, onResolve, loading }) {
-  const [resolving, setResolving] = React.useState({});
-
-  async function handleResolve(requestId, status) {
-    setResolving((prev) => ({ ...prev, [requestId]: status }));
-    try {
-      await onResolve(requestId, status);
-    } finally {
-      setResolving((prev) => { const n = { ...prev }; delete n[requestId]; return n; });
-    }
-  }
-
-  if (!loading && requests.length === 0) return null;
-
-  return (
-    <div className="hm-card hm-txreq-panel">
-      <div className="hm-card-header">
-        <div>
-          <div className="hm-card-title">Transcript requests</div>
-          <div className="hm-card-sub">Participants asking for access to your meeting transcripts</div>
-        </div>
-        {requests.length > 0 && (
-          <span className="hm-txreq-count-badge">{requests.length}</span>
-        )}
-      </div>
-      <div className="hm-divider" />
-      {loading ? (
-        <div className="hm-tx-loading"><div className="hm-tx-loading-dots"><span /><span /><span /></div></div>
-      ) : (
-        <div className="hm-txreq-list">
-          {requests.map((req) => (
-            <div key={req._id} className="hm-txreq-item">
-              <div className="hm-txreq-item-info">
-                <div className="hm-txreq-item-name">{req.requesterName}</div>
-                <div className="hm-txreq-item-meta">
-                  <span className="hm-txreq-item-code">{req.meetingCode}</span>
-                  <span className="hm-txreq-item-dot" />
-                  <span className="hm-txreq-item-time">
-                    {req.createdAt ? new Date(req.createdAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : ""}
-                  </span>
-                </div>
-              </div>
-              <div className="hm-txreq-item-actions">
-                <button
-                  className="hm-txreq-approve-btn"
-                  disabled={!!resolving[req._id]}
-                  onClick={() => handleResolve(req._id, "approved")}
-                >
-                  {resolving[req._id] === "approved" ? "…" : (
-                    <>
-                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-                        <polyline points="20 6 9 17 4 12" />
-                      </svg>
-                      Approve
-                    </>
-                  )}
-                </button>
-                <button
-                  className="hm-txreq-deny-btn"
-                  disabled={!!resolving[req._id]}
-                  onClick={() => handleResolve(req._id, "denied")}
-                >
-                  {resolving[req._id] === "denied" ? "…" : (
-                    <>
-                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-                        <path d="M18 6L6 18M6 6l12 12" />
-                      </svg>
-                      Deny
-                    </>
-                  )}
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
 function TranscriptRequestBanner({ requests, onClose }) {
   if (!requests || requests.length === 0) return null;
   const req = requests[0];
   return (
     <div className="hm-txreq-banner" role="alert" aria-live="polite">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
-        <path d="M9 12h6M9 16h6M7 4H5a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2V6a2 2 0 00-2-2h-2" />
-        <path d="M15 2H9a1 1 0 00-1 1v2a1 1 0 001 1h6a1 1 0 001-1V3a1 1 0 00-1-1z" />
-      </svg>
+      <div className="hm-txreq-banner-icon">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
+          <path d="M9 12h6M9 16h6M7 4H5a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2V6a2 2 0 00-2-2h-2" />
+          <path d="M15 2H9a1 1 0 00-1 1v2a1 1 0 001 1h6a1 1 0 001-1V3a1 1 0 00-1-1z" />
+        </svg>
+      </div>
       <span>
         <strong>{req.requesterName}</strong> requested transcript for <strong>{req.meetingCode}</strong>
         {requests.length > 1 ? ` (+${requests.length - 1} more)` : ""}
       </span>
       <button className="hm-txreq-banner-close" onClick={onClose} aria-label="Dismiss">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
           <path d="M18 6L6 18M6 6l12 12" />
         </svg>
       </button>
     </div>
+  );
+}
+
+function RagPanel({ transcripts }) {
+  const [selectedId, setSelectedId] = React.useState(null);
+  const [question, setQuestion] = React.useState('');
+  const inputRef = React.useRef(null);
+  const chatEndRef = React.useRef(null);
+
+  const selectedTranscript = transcripts.find(
+    (t) => (t._id || t.meetingCode) === selectedId
+  );
+  const ragId = selectedTranscript?._id || selectedTranscript?.meetingCode || null;
+
+  const { index, query, clearSession, history, loading, indexing, error, indexStatus } = useRag(ragId);
+
+  React.useEffect(() => {
+    if (ragId) index();
+  }, [ragId, index]);
+
+  React.useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [history]);
+
+  async function handleAsk() {
+    const q = question.trim();
+    if (!q || loading || indexing || indexStatus !== 'ready') return;
+    setQuestion('');
+    await query(q);
+    inputRef.current?.focus();
+  }
+
+  function handleKeyDown(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleAsk();
+    }
+  }
+
+  const isReady = indexStatus === 'ready';
+  const isIndexing = indexing || indexStatus === 'indexing';
+  const isNoContent = indexStatus === 'no_content';
+  const hasTranscripts = transcripts.length > 0;
+
+  return (
+    <div className="hm-card hm-rag-panel" style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 480 }}>
+      <div className="hm-card-header">
+        <div>
+          <div className="hm-card-title">Ask your transcripts</div>
+          <div className="hm-card-sub">RAG-powered Q&amp;A over your meeting content</div>
+        </div>
+        {ragId && history.length > 0 && (
+          <button
+            className="hm-tx-refresh-btn"
+            onClick={() => clearSession()}
+            title="Clear conversation"
+            style={{ fontSize: '0.7rem', padding: '4px 10px', borderRadius: 6 }}
+          >
+            Clear
+          </button>
+        )}
+      </div>
+      <div className="hm-divider" />
+
+      {!hasTranscripts ? (
+        <div className="hm-activity-empty" style={{ flex: 1 }}>
+          <div className="hm-activity-empty-orb" aria-hidden>
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="rgba(59,130,246,0.5)" strokeWidth="1.3" strokeLinecap="round">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+            </svg>
+          </div>
+          <p className="hm-activity-empty-title">No transcripts yet</p>
+          <p className="hm-activity-empty-sub">Host a meeting to start asking questions about it.</p>
+        </div>
+      ) : (
+        <>
+          <div style={{ padding: '12px 16px 0' }}>
+            <label style={{ fontSize: '0.7rem', color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.06em', display: 'block', marginBottom: 6 }}>
+              Select meeting
+            </label>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 140, overflowY: 'auto' }}>
+              {transcripts.slice(0, 10).map((t) => {
+                const id = t._id || t.meetingCode;
+                const isSelected = id === selectedId;
+                return (
+                  <button
+                    key={id}
+                    onClick={() => {
+                      if (!isSelected) {
+                        setSelectedId(id);
+                        clearSession();
+                      }
+                    }}
+                    style={{
+                      textAlign: 'left',
+                      padding: '7px 10px',
+                      borderRadius: 8,
+                      border: isSelected ? '1px solid rgba(56,189,248,0.5)' : '1px solid rgba(255,255,255,0.06)',
+                      background: isSelected ? 'rgba(56,189,248,0.08)' : 'rgba(255,255,255,0.03)',
+                      color: isSelected ? 'var(--text-1)' : 'var(--text-2)',
+                      fontSize: '0.78rem',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      transition: 'all 0.15s',
+                    }}
+                  >
+                    <span style={{ fontFamily: 'monospace', fontSize: '0.75rem', opacity: 0.7 }}>{t.meetingCode}</span>
+                    {t.createdAt && (
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-3)', marginLeft: 'auto' }}>
+                        {new Date(t.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                      </span>
+                    )}
+                    {isSelected && isIndexing && (
+                      <span style={{ fontSize: '0.65rem', color: 'rgba(56,189,248,0.7)', marginLeft: 4 }}>indexing…</span>
+                    )}
+                    {isSelected && isReady && (
+                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="rgba(56,189,248,0.8)" strokeWidth="2.5" strokeLinecap="round">
+                        <polyline points="20 6 9 17 4 12" />
+                      </svg>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div style={{ flex: 1, overflowY: 'auto', padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 10, minHeight: 160 }}>
+            {!selectedId && (
+              <div style={{ color: 'var(--text-3)', fontSize: '0.8rem', textAlign: 'center', marginTop: 32 }}>
+                Select a meeting above to start asking questions
+              </div>
+            )}
+
+            {selectedId && isIndexing && history.length === 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, marginTop: 32 }}>
+                <div className="hm-tx-loading-dots"><span /><span /><span /></div>
+                <span style={{ color: 'var(--text-3)', fontSize: '0.8rem' }}>Indexing transcript, please wait…</span>
+              </div>
+            )}
+            {selectedId && isIndexing && history.length > 0 && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.75rem', color: 'rgba(56,189,248,0.7)', padding: '6px 10px', borderRadius: 8, background: 'rgba(56,189,248,0.06)', border: '1px solid rgba(56,189,248,0.12)' }}>
+                <div className="hm-tx-loading-dots" style={{ margin: 0, transform: 'scale(0.7)' }}><span /><span /><span /></div>
+                Re-indexing transcript…
+              </div>
+            )}
+
+            {selectedId && isNoContent && (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, marginTop: 32, padding: '0 12px', textAlign: 'center' }}>
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="rgba(100,116,139,0.6)" strokeWidth="1.5" strokeLinecap="round">
+                  <path d="M9 12h6M9 16h6M7 4H5a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2V6a2 2 0 00-2-2h-2" />
+                  <path d="M15 2H9a1 1 0 00-1 1v2a1 1 0 001 1h6a1 1 0 001-1V3a1 1 0 00-1-1z" />
+                </svg>
+                <span style={{ color: 'var(--text-2)', fontSize: '0.82rem', fontWeight: 500 }}>No transcript content</span>
+                <span style={{ color: 'var(--text-3)', fontSize: '0.76rem', lineHeight: 1.5 }}>
+                  This meeting was recorded before transcript indexing was supported. Only meetings with full transcripts can be queried.
+                </span>
+              </div>
+            )}
+            {selectedId && isReady && !isIndexing && history.length === 0 && !loading && (
+              <div style={{ color: 'var(--text-3)', fontSize: '0.8rem', textAlign: 'center', marginTop: 32 }}>
+                Transcript ready — ask anything about this meeting
+              </div>
+            )}
+
+            {history.map((msg, i) => (
+              <div
+                key={i}
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: msg.role === 'user' ? 'flex-end' : 'flex-start',
+                  gap: 4,
+                }}
+              >
+                <div
+                  style={{
+                    maxWidth: '88%',
+                    padding: '9px 13px',
+                    borderRadius: msg.role === 'user' ? '12px 12px 4px 12px' : '12px 12px 12px 4px',
+                    background: msg.role === 'user' ? 'rgba(56,189,248,0.12)' : 'rgba(255,255,255,0.05)',
+                    border: msg.role === 'user' ? '1px solid rgba(56,189,248,0.2)' : '1px solid rgba(255,255,255,0.07)',
+                    fontSize: '0.82rem',
+                    lineHeight: 1.55,
+                    color: 'var(--text-1)',
+                    whiteSpace: 'pre-wrap',
+                  }}
+                >
+                  {msg.content}
+                </div>
+                {msg.sources && msg.sources.length > 0 && (
+                  <div style={{ fontSize: '0.68rem', color: 'var(--text-3)', display: 'flex', flexWrap: 'wrap', gap: 4, maxWidth: '88%' }}>
+                    {msg.sources.slice(0, 3).map((s, si) => (
+                      <span
+                        key={si}
+                        style={{ padding: '2px 7px', borderRadius: 4, background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' }}
+                      >
+                        {s.speaker ? s.speaker + ': ' : ''}{String(s.text || '').slice(0, 50)}{(s.text || '').length > 50 ? '...' : ''}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+
+            {loading && (
+              <div style={{ display: 'flex', alignItems: 'flex-start' }}>
+                <div style={{ padding: '9px 14px', borderRadius: '12px 12px 12px 4px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.07)' }}>
+                  <div className="hm-tx-loading-dots" style={{ margin: 0 }}>
+                    <span /><span /><span />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {error && !isIndexing && !isNoContent && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.78rem', color: '#f87171', padding: '8px 12px', borderRadius: 8, background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.2)' }}>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                  <circle cx="12" cy="12" r="10" /><path d="M12 8v4M12 16h.01" />
+                </svg>
+                {error}
+                <button
+                  onClick={() => index()}
+                  style={{ marginLeft: 'auto', fontSize: '0.72rem', padding: '2px 8px', borderRadius: 5, border: '1px solid rgba(248,113,113,0.3)', background: 'transparent', color: '#f87171', cursor: 'pointer' }}
+                >
+                  Retry
+                </button>
+              </div>
+            )}
+
+            <div ref={chatEndRef} />
+          </div>
+
+          {selectedId && (
+            <div style={{ padding: '10px 14px 14px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+                <textarea
+                  ref={inputRef}
+                  value={question}
+                  onChange={(e) => setQuestion(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  placeholder={isIndexing ? (history.length > 0 ? 'Re-indexing, please wait…' : 'Indexing transcript…') : isNoContent ? 'No content available' : isReady ? 'Ask about this meeting…' : 'Preparing…'}
+                  disabled={loading || isIndexing || isNoContent || !isReady}
+                  rows={2}
+                  style={{
+                    flex: 1,
+                    resize: 'none',
+                    padding: '9px 12px',
+                    borderRadius: 10,
+                    border: '1px solid rgba(255,255,255,0.1)',
+                    background: 'rgba(255,255,255,0.04)',
+                    color: 'var(--text-1)',
+                    fontSize: '0.82rem',
+                    lineHeight: 1.5,
+                    outline: 'none',
+                    fontFamily: 'inherit',
+                    opacity: isIndexing ? 0.5 : 1,
+                  }}
+                />
+                <button
+                  onClick={handleAsk}
+                  disabled={!question.trim() || loading || isIndexing || isNoContent || !isReady}
+                  style={{
+                    padding: '9px 14px',
+                    borderRadius: 10,
+                    border: 'none',
+                    background: question.trim() && isReady && !loading ? 'rgba(56,189,248,0.18)' : 'rgba(255,255,255,0.05)',
+                    color: question.trim() && isReady && !loading ? 'rgba(56,189,248,0.9)' : 'var(--text-3)',
+                    cursor: question.trim() && isReady && !loading ? 'pointer' : 'default',
+                    fontSize: '0.8rem',
+                    transition: 'all 0.15s',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 5,
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                    <line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" />
+                  </svg>
+                  Ask
+                </button>
+              </div>
+              <div style={{ fontSize: '0.67rem', color: 'var(--text-3)', marginTop: 5, textAlign: 'center' }}>
+                Enter to send · Shift+Enter for new line
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function NotificationDrawer({ open, onClose, requests, onResolve, loading, onResolved }) {
+  const [resolving, setResolving] = React.useState({});
+  const [resolved, setResolved] = React.useState({});
+
+  React.useEffect(() => {
+    if (!open) return;
+    function onKey(e) { if (e.key === "Escape") onClose(); }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
+  async function handleResolve(requestId, status) {
+    setResolving(prev => ({ ...prev, [requestId]: status }));
+    try {
+      await onResolve(requestId, status);
+      setResolved(prev => ({ ...prev, [requestId]: status }));
+      setTimeout(() => {
+        if (typeof onResolved === "function") onResolved(requestId);
+        setResolving(prev => { const n = { ...prev }; delete n[requestId]; return n; });
+        setResolved(prev => { const n = { ...prev }; delete n[requestId]; return n; });
+      }, 900);
+    } catch {
+      setResolving(prev => { const n = { ...prev }; delete n[requestId]; return n; });
+    }
+  }
+
+  const pendingItems = requests.filter(r => !resolved[r._id]);
+
+  return (
+    <>
+      {open && <div className="hm-drawer-overlay" onClick={onClose} aria-hidden />}
+      <div
+        className={`hm-drawer ${open ? "hm-drawer-open" : ""}`}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Transcript requests"
+      >
+        <div className="hm-drawer-header">
+          <div className="hm-drawer-header-info">
+            <div className="hm-drawer-title">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+                <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+              </svg>
+              Transcript Requests
+            </div>
+            <div className="hm-drawer-sub">
+              {loading ? "Loading…" : pendingItems.length === 0 ? "All caught up" : `${pendingItems.length} pending approval`}
+            </div>
+          </div>
+          <button className="hm-drawer-close" onClick={onClose} aria-label="Close">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+              <path d="M18 6L6 18M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        <div className="hm-drawer-body">
+          {loading && pendingItems.length === 0 && (
+            <div className="hm-drawer-empty">
+              <div className="hm-tx-loading-dots"><span /><span /><span /></div>
+            </div>
+          )}
+
+          {!loading && pendingItems.length === 0 && (
+            <div className="hm-drawer-empty">
+              <div className="hm-drawer-empty-icon">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                  <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+                  <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+                </svg>
+              </div>
+              <p>No pending requests</p>
+              <p className="hm-drawer-empty-sub">New requests will appear here</p>
+            </div>
+          )}
+
+          {pendingItems.map((req) => {
+            const isResolving = !!resolving[req._id];
+            const resolvedStatus = resolved[req._id];
+            return (
+              <div key={req._id} className={`hm-drawer-item ${resolvedStatus ? `hm-drawer-item-resolved hm-drawer-item-${resolvedStatus}` : ""}`}>
+                <div className="hm-drawer-item-top">
+                  <div className="hm-drawer-item-avatar">
+                    {(req.requesterName || "?")[0].toUpperCase()}
+                  </div>
+                  <div className="hm-drawer-item-info">
+                    <div className="hm-drawer-item-name">{req.requesterName || "Unknown"}</div>
+                    <div className="hm-drawer-item-meta">
+                      <span className="hm-drawer-item-code">{req.meetingCode}</span>
+                      {req.createdAt && (
+                        <>
+                          <span className="hm-txreq-item-dot" />
+                          <span className="hm-drawer-item-time">
+                            {new Date(req.createdAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                          </span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </div>
+                {resolvedStatus ? (
+                  <div className={`hm-drawer-resolved-state ${resolvedStatus === "approved" ? "hm-drawer-resolved-approve" : "hm-drawer-resolved-deny"}`}>
+                    {resolvedStatus === "approved" ? (
+                      <>
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><polyline points="20 6 9 17 4 12" /></svg>
+                        Approved
+                      </>
+                    ) : (
+                      <>
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12" /></svg>
+                        Denied
+                      </>
+                    )}
+                  </div>
+                ) : (
+                  <div className="hm-drawer-item-actions">
+                    <button
+                      className="hm-drawer-approve-btn"
+                      disabled={isResolving}
+                      onClick={() => handleResolve(req._id, "approved")}
+                    >
+                      {resolving[req._id] === "approved" ? "…" : (
+                        <>
+                          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><polyline points="20 6 9 17 4 12" /></svg>
+                          Approve
+                        </>
+                      )}
+                    </button>
+                    <button
+                      className="hm-drawer-deny-btn"
+                      disabled={isResolving}
+                      onClick={() => handleResolve(req._id, "denied")}
+                    >
+                      {resolving[req._id] === "denied" ? "…" : (
+                        <>
+                          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12" /></svg>
+                          Deny
+                        </>
+                      )}
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </>
   );
 }
 
@@ -991,20 +1284,12 @@ export default function Home() {
     localStorage.getItem(PENDING_TRANSCRIPT_KEY) || null
   );
   const [rightPanel, setRightPanel] = useState("activity");
+  const [notifOpen, setNotifOpen] = useState(false);
   const [pendingRequests, setPendingRequests] = useState([]);
   const [reqsLoading, setReqsLoading] = useState(false);
   const [bannerRequests, setBannerRequests] = useState([]);
   const [myRequests, setMyRequests] = useState([]);
   const [currentUserId, setCurrentUserId] = useState(null);
-  const [reqUpdateSnack, setReqUpdateSnack] = useState(null);
-  const [isHostUser, setIsHostUser] = useState(() => {
-    try {
-      return Object.keys(localStorage).some((k) => {
-        if (!k.startsWith("host:")) return false;
-        try { return !!JSON.parse(localStorage.getItem(k))?.hostSecret; } catch { return false; }
-      });
-    } catch { return false; }
-  });
   const [participatedMeetings, setParticipatedMeetings] = useState([]);
 
   const isFetchingRef = useRef(false);
@@ -1141,13 +1426,7 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    loadOwnedRooms()
-      .then(({ ok, data }) => {
-        if (ok && Array.isArray(data?.rooms) && data.rooms.length > 0) {
-          setIsHostUser(true);
-        }
-      })
-      .catch(() => { });
+    loadOwnedRooms().catch(() => { });
   }, []);
 
   useEffect(() => {
@@ -1166,7 +1445,6 @@ export default function Home() {
     loadHostPendingRequests()
       .then(({ ok, data }) => {
         if (ok && data?.requests && data.requests.length > 0) {
-          setIsHostUser(true);
           setPendingRequests(data.requests);
         }
       })
@@ -1389,7 +1667,26 @@ export default function Home() {
             </svg>
             Request Transcript
           </button>
+          <button className={`hm-sidebar-nav-item hm-sidebar-nav-rag ${rightPanel === "rag" ? "hm-sidebar-nav-active hm-sidebar-nav-rag-active" : ""}`} aria-current={rightPanel === "rag" ? "page" : undefined} onClick={() => setRightPanel("rag")}>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+            </svg>
+            Ask Transcripts
+          </button>
         </nav>
+
+        {(pendingRequests.length > 0 || reqsLoading) && (
+          <button className={`hm-sidebar-notif-btn ${pendingRequests.length > 0 ? "hm-sidebar-notif-has-items" : ""}`} onClick={() => setNotifOpen(true)}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+              <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+            </svg>
+            <span className="hm-sidebar-notif-label">Requests</span>
+            {pendingRequests.length > 0 && (
+              <span className="hm-sidebar-notif-count">{pendingRequests.length}</span>
+            )}
+          </button>
+        )}
 
         {TRANSCRIPTS_ENABLED && (
           <>
@@ -1437,12 +1734,6 @@ export default function Home() {
           </div>
         </div>
 
-        {bannerRequests.length > 0 && (
-          <TranscriptRequestBanner
-            requests={bannerRequests}
-            onClose={() => setBannerRequests([])}
-          />
-        )}
         <div className="hm-grid">
           <div className="hm-left">
             <div className="hm-card">
@@ -1505,13 +1796,6 @@ export default function Home() {
               </div>
             </div>
 
-            {(pendingRequests.length > 0 || reqsLoading) && (
-              <TranscriptRequestPanel
-                requests={pendingRequests}
-                onResolve={handleResolveRequest}
-                loading={reqsLoading}
-              />
-            )}
           </div>
 
           {rightPanel === "activity" ? (
@@ -1525,6 +1809,8 @@ export default function Home() {
               userData={userData}
               authLoading={authLoading}
             />
+          ) : rightPanel === "rag" ? (
+            <RagPanel transcripts={dedupedTranscripts} />
           ) : rightPanel === "request-transcript" ? (
             <RequestTranscriptPanel
               participatedMeetings={participatedMeetings}
@@ -1668,6 +1954,22 @@ export default function Home() {
           />
         )}
       </div>
+
+      {bannerRequests.length > 0 && (
+        <TranscriptRequestBanner
+          requests={bannerRequests}
+          onClose={() => setBannerRequests([])}
+        />
+      )}
+
+      <NotificationDrawer
+        open={notifOpen}
+        onClose={() => setNotifOpen(false)}
+        requests={pendingRequests}
+        onResolve={handleResolveRequest}
+        loading={reqsLoading}
+        onResolved={(id) => setPendingRequests(prev => prev.filter(r => r._id !== id))}
+      />
     </div>
   );
 }
