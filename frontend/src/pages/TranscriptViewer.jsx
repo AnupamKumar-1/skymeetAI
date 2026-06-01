@@ -349,7 +349,7 @@ export default function TranscriptViewer({ t, onClose, onSummaryGenerated }) {
             if (data.transcript) {
                 onSummaryGenerated?.(data.transcript);
             } else {
-                if (t) t.aiSummary = result;
+                onSummaryGenerated?.({ ...t, aiSummary: result });
             }
         } catch (err) {
             setAiError(err.message || "Failed to generate summary.");

@@ -110,7 +110,7 @@ export async function resolveRequestService(req) {
         return { status: 404, body: { success: false, message: "Request not found." } };
     }
 
-    if (request.hostId?.toString() !== userId.toString()) {
+    if (!request.hostId || request.hostId?.toString() !== userId.toString()) {
         const meeting = await Meeting.findOne({ meetingCode: request.meetingCode }).lean();
         if (!meeting || (meeting.ownerId || meeting.hostId)?.toString() !== userId.toString()) {
             return { status: 403, body: { success: false, message: "Only the host of this meeting can resolve requests." } };

@@ -84,7 +84,7 @@ export function resolveAuth(req) {
 
 export function isAuthorized(doc, userId, secretHash) {
     if (!doc) return false;
-    const ownerMatch = userId && doc.ownerId && doc.ownerId === userId;
+    const ownerMatch = userId && doc.ownerId && String(doc.ownerId) === String(userId);
     const secretMatch = secretHash && doc.hostSecretHash && doc.hostSecretHash === secretHash;
     return !!(ownerMatch || secretMatch);
 }
@@ -344,7 +344,13 @@ export async function generateAiSummaryService(req) {
 
         const groqData = await groqRes.json();
         const raw = groqData.choices?.[0]?.message?.content ?? "";
-        const aiSummary = JSON.parse(raw);
+        let aiSummary;
+        try {
+            aiSummary = JSON.parse(raw);
+        } catch {
+            log.error("generateAiSummary: Groq returned invalid JSON", { raw: raw.slice(0, 200) });
+            return { status: 502, body: { success: false, message: "AI provider returned invalid response" } };
+        }
 
         const { default: Transcript } = await import("../models/transcript.model.js");
         const updated = await Transcript.findByIdAndUpdate(

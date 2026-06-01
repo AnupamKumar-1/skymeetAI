@@ -57,6 +57,14 @@ export function useRag(transcriptIdOrCode) {
                     headers: getHeaders(),
                     credentials: "include",
                 });
+                if (res.status === 403 || res.status === 401) {
+                    if (mountedRef.current) {
+                        setIndexing(false);
+                        setIndexStatus("error");
+                        setError("Not authorized to access this transcript");
+                    }
+                    return;
+                }
                 const data = await res.json();
                 if (!mountedRef.current) return;
 
