@@ -14,6 +14,8 @@
   <img src="https://img.shields.io/badge/License-MIT-534AB7?style=for-the-badge" />
   &nbsp;
   <img src="https://img.shields.io/badge/PRs-Welcome-1D9E75?style=for-the-badge" />
+&nbsp;
+  <img src="https://img.shields.io/badge/RAG_Q%26A-Semantic_Search-10B981?style=for-the-badge" />
 </p>
 
 <p align="center">
