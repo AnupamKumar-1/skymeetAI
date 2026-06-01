@@ -24,6 +24,8 @@ build/
 __pycache__/
 *.py[cod]
 
+build/
+dist/
 
 .env
 .env.local
