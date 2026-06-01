@@ -57,6 +57,7 @@ Most video tools record a meeting and leave you with a wall of audio. Hoovik goe
 | 😮 **Live Emotion AI** | Facial landmarks + audio → ~300–500 ms P50 latency |
 | 📝 **Auto Transcription** | Whisper ASR per speaker, delivered post-meeting |
 | 🤖 **AI Meeting Summary** | Groq LLM summary + NLP-vs-live emotion discrepancy detection |
+| 🔍 **RAG Q&A** | Transcripts indexed as Nomic vector chunks; MMR-reranked semantic search; Groq LLM answers with session history |
 | ⚡ **Distributed Backend** | 3 pm2 processes unified by Redis pub/sub |
 | 🔒 **Auth & Rate Limiting** | JWT + refresh rotation, Redis Lua locks, account lockout |
 
@@ -121,9 +122,13 @@ MediaPipe face landmarks         Wav2Vec2 embedding
 
 | Event | Direction | Payload |
 |---|---|---|
-| `emotion.frame` | Frontend → Service | `{ participantId, jpeg: base64 }` |
-| `audio_chunk` | Frontend → Service | `{ participantId, pcm: Float32Array }` |
-| `emotion.result` | Service → Frontend | `{ participantId, emotion, confidence, modality }` |
+| `emotion.frame` | Frontend → Service | `{ meetingId, participantId, buffer: Uint8Array }` — JPEG frame |
+| `audio_chunk` | Frontend → Service | `Uint8Array` — 1600-sample Float32 PCM at 16 kHz |
+| `participant.media_state` | Frontend → Service | `{ participantId, micEnabled, cameraEnabled }` — immediate modality update on mic/cam toggle |
+| `emotion.result` | Service → Frontend | `{ participantId, result: { emotion, confidence, modality, anomaly } }` |
+| `server.status` | Service → Frontend | `{ targetFps, modalityStaleSec }` — server capability negotiation |
+| `backpressure` | Service → Frontend | `{ suggestedFps }` — server requests reduced capture rate |
+| `emotion.error` | Service → Frontend | `{ code }` — inference or auth error for a participant |
 
 ### Model stack
 
@@ -259,7 +264,7 @@ Response:
 }
 ```
 
-> **Note:** The frontend polls every 20 s (up to 30 attempts) for transcript availability after the meeting ends. Summary generation is rate-limited to 2 requests per 2 hours per transcript.
+> **Note:** After the meeting ends, the frontend polls for transcript availability using exponential backoff — delays of 5 s → 10 s → 20 s → 40 s (±20% jitter), then repeating at 40-second intervals up to a 10-minute wall clock cap. No fixed polling interval or fixed attempt count is used. Summary generation is rate-limited to 2 requests per 2 hours per transcript.
 
 ### Retry & delivery guarantees
 
@@ -372,7 +377,8 @@ graph TD
 | **Async transcript pipeline** | HTTP 202 immediately; background: ffmpeg → Whisper (`small`) → segment merging → DistilRoBERTa per-segment emotion → `build_intelligent_summary` → HTTP POST callback (3 retries: 5 s → 15 s → 30 s on network/5xx; 4xx not retried) |
 | **Multi-process backend** | 3 pm2 instances via `@socket.io/redis-adapter`; participant map as Redis Hash (`HSET`/`HDEL` per event); no in-process room state |
 | **Auth & rate limiting** | JWT + HttpOnly refresh token rotation; Redis Lua INCR+EXPIRE per-IP and per-username; account lockout after 10 failed logins (900 s TTL); uniform `401` prevents username enumeration |
-| **AI summary** | `generateAiSummaryService` accepts `emotionData`/`emotionNames` from browser; `buildGroqPrompt` annotates each Whisper segment with matched live facial/audio emotion via `buildSpeakerLiveMap`; returns `discrepancies[]` and `live_dominant_emotion` per speaker; rate-limited 2× per 2 hours |
+| **AI summary** | `generateAiSummaryService` accepts `emotionData`/`emotionNames` from browser; `buildGroqPrompt` annotates each Whisper segment with matched live facial/audio emotion via `buildSpeakerLiveMap`; returns `discrepancies[]` and `live_dominant_emotion` per speaker; Groq model `llama-3.1-8b-instant`; rate-limited 2× per 2 hours |
+| **RAG pipeline** | Transcripts chunked (segment-based or sliding-window, 600 tokens, 100 overlap) → Nomic `nomic-embed-text-v1.5` embeddings cached in Redis (7-day TTL) → BullMQ background indexing → MongoDB `$vectorSearch` + MMR reranking (`λ=0.6`, top-5) → Groq `llama-3.3-70b-versatile` with 30-message session history; SSE streaming |
 | **Redis test suite** | 25 tests covering distributed cache, locks, rate limiting, pub/sub, batch ops, reconnection recovery; CI runs 20 via `npm run test:redis:ci` |
 
 ---
@@ -477,7 +483,7 @@ npm run build    # production
 
 **3 — CPU-bound inference without blocking** — The emotion service offloads PyTorch and MediaPipe to a thread-pool executor. Backpressure events throttle the client when the face queue depth hits 3.
 
-**4 — Async transcript delivery with no shared state** — Services share no DB or queue. The transcript service delivers via HTTP POST callback. The frontend polls every 20 s (up to 30 attempts) — fully decoupled.
+**4 — Async transcript delivery with no shared state** — Services share no DB or queue. The transcript service delivers via HTTP POST callback. The frontend polls using exponential backoff (5 s → 10 s → 20 s → 40 s with ±20% jitter, repeating at 40 s up to a 10-minute cap) — fully decoupled.
 
 **5 — Parallel media capture in the browser** — Host simultaneously captures frames for emotion, records audio for transcription, and plays WebRTC video via three independent tap points.
 
@@ -489,6 +495,7 @@ npm run build    # production
 
 | Area | Limitation |
 |---|---|
+| **BullMQ worker in-process** | The RAG indexing `indexWorker` runs in the same Node.js process as the HTTP/WebSocket server. Under sustained indexing load, event-loop contention may increase WebSocket and HTTP response latency because indexing workers are not isolated into a dedicated process. |
 | **Inference scaling** | Emotion service in-process state cannot be horizontally scaled without externalising to Redis. Transcript service model singletons have the same constraint. |
 | **Transcript delivery** | An empty merged-segment result causes a silent no-callback. A 4xx response from the backend also causes silent loss (only network errors and 5xx are retried). |
 | **NODE_API timeout** | `requests.post(..., timeout=None)` — a hung backend blocks the transcript background thread indefinitely across all retry attempts. |
@@ -522,7 +529,7 @@ See [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) — covers prerequisites, loc
 | File | Contents |
 |---|---|
 | [`docs/frontend.md`](docs/frontend.md) | Hook architecture, WebRTC lifecycle, emotion pipeline, event contracts, error handling |
-| [`docs/backend.md`](docs/backend.md) | Routes, Socket.IO handlers, Redis lock design, pm2 config, API contracts, security |
+| [`docs/backend.md`](docs/backend.md) | Routes, Socket.IO handlers, Redis lock design, pm2 config, RAG pipeline, API contracts, security |
 | [`docs/realTimeEmotionService.md`](docs/realTimeEmotionService.md) | Inference pipeline, model training, configuration schema, performance |
 | [`docs/transcript_service.md`](docs/transcript_service.md) | ASR pipeline, segment merging, callback schema, error handling |
 | [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) | Setup guide, prerequisites, contribution workflow |

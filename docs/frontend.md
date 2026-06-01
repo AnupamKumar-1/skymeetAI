@@ -13,7 +13,7 @@ The following features are implemented and directly observable in the source:
 
 - **Multi-party video via WebRTC** — each remote peer gets its own `RTCPeerConnection`, managed in `useWebRTC.js`. Perfect-negotiation (polite/impolite roles) is implemented.
 - **Active-speaker detection** — two independent detection paths exist: an SSRC-based path using `RTCRtpReceiver.getSynchronizationSources()` (used when available) and an RMS-based fallback using Web Audio API `AnalyserNode`. Both are in `useAudioAnalyzer.js`.
-- **Real-time emotion analysis** — the host sends video frames (`emotion.frame`) and audio chunks (`audio_chunk`) for each remote participant over per-participant Socket.IO connections to a separate emotion backend (`REACT_APP_EMOTION_SOCKET_URL`). Implemented in `useEmotionCapture.js` and `useEmotionSocket.js`.
+- **Real-time emotion analysis** — the host sends video frames (`emotion.frame`) and audio chunks (`audio_chunk`) for each remote participant over per-participant Socket.IO connections to a separate emotion backend (`VITE_EMOTION_SOCKET_URL`). Implemented in `useEmotionCapture.js` and `useEmotionSocket.js`.
 - **Noise-gated audio recording** — the host records each participant's audio stream using `MediaRecorder`. Chunks are gated by an RMS noise gate before being counted as speech. Implemented in `useRecording.js`.
 - **In-meeting chat** — real-time, socket-delivered chat with pending/sent/failed delivery states, ACK timeout (`ACK_TIMEOUT_MS = 5000` ms, `useChat.js`), and retry support.
 - **Screen sharing** — replaces the local video track in all peer connections via `replaceTrackInPeers` (`mediaControllerUtils.js`).
@@ -73,12 +73,12 @@ graph LR
         HM2[Home.jsx / AuthContext.jsx]
     end
 
-    subgraph SignalServer["Signalling Server\\nREACT_APP_SIGNALING_URL\\ndefault: localhost:8000"]
+    subgraph SignalServer["Signalling Server\\nVITE_SOCKET_URL\\ndefault: localhost:8000"]
         SIO[Socket.IO]
         API[REST API\\n/api/v1/...]
     end
 
-    subgraph EmotionServer["Emotion Backend\\nREACT_APP_EMOTION_SOCKET_URL"]
+    subgraph EmotionServer["Emotion Backend\\nVITE_EMOTION_SOCKET_URL"]
         ESS[Socket.IO\\nauth: participantId]
     end
 
@@ -187,7 +187,7 @@ sequenceDiagram
 
 ### Emotion socket pool (`useEmotionSocket.js`)
 
-- `ensureSocket(participantId)` lazily creates a Socket.IO connection to `REACT_APP_EMOTION_SOCKET_URL` authenticated with `auth: { participantId }`.
+- `ensureSocket(participantId)` lazily creates a Socket.IO connection to `VITE_EMOTION_SOCKET_URL` authenticated with `auth: { participantId }`.
 - Incoming `emotion.result` events are handled by `handleEmotion`, which validates against `VALID_EMOTIONS` and a minimum confidence of `0.05` before appending to `emotionsMap`. History is capped at the last 20 entries per participant.
 - `notifyMediaState(participantId, { micEnabled, cameraEnabled })` emits `participant.media_state` to the backend. It also calls `updateParticipantMediaState` in `useEmotionCapture` to immediately halt audio/video capture for that participant.
 - `releaseSocket(participantId)` disconnects and removes the socket; called as `releaseEmotionSocket` from `closePeer` in `VideoMeet.jsx`.
@@ -197,16 +197,23 @@ sequenceDiagram
 - One `MediaRecorder` per participant, 1-second time slices.
 - Preferred MIME type is `audio/webm;codecs=opus`, falling back to `audio/webm`, then browser default.
 - Remote participant audio is re-encoded through a dedicated `AudioContext` before passing to `MediaRecorder`.
-- Each 1-second chunk is evaluated against an RMS gate: `NOISE_GATE_RMS_THRESHOLD = 0.008` (env: `REACT_APP_NOISE_GATE_RMS`), hold time `NOISE_GATE_HOLD_MS = 1500` ms, smoothing `NOISE_GATE_SMOOTHING = 0.8`. All three are runtime-configurable via environment variables.
-- `hasSufficientSpeech(rec)` returns `true` if `gateState.totalSpeechMs >= SPEECH_MIN_ACTIVE_MS` (default `800` ms, env: `REACT_APP_SPEECH_MIN_ACTIVE_MS`).
+- Each 1-second chunk is evaluated against an RMS gate: `NOISE_GATE_RMS_THRESHOLD = 0.008` (env: `VITE_NOISE_GATE_RMS`), hold time `NOISE_GATE_HOLD_MS = 1500` ms, smoothing `NOISE_GATE_SMOOTHING = 0.8`. All three are runtime-configurable via environment variables.
+- `hasSufficientSpeech(rec)` returns `true` if `gateState.totalSpeechMs >= SPEECH_MIN_ACTIVE_MS` (default `800` ms, env: `VITE_SPEECH_MIN_ACTIVE_MS`).
 - On `endMeeting`, `stopAllRecorders()` is awaited before chunks are snapshotted and submitted to `TRANSCRIPT_ENDPOINT`.
 
 ### Transcript submission (`useMeetingLifecycle.js → uploadTranscriptWithRetry()`)
 
-- Called directly inside `endMeeting()`, before navigation to `/home`. It blocks navigation until complete (or exhausted). Before calling, `endMeeting` builds an `emotionSnapshot` from `emotionsMap` (the in-memory live emotion history accumulated during the call) and saves it to `localStorage` under `emotions:<code>` and `emotionNames:<code>` for later retrieval by `TranscriptViewer.jsx`.
+- Called inside `endMeeting()`, **after** navigation to `/home`. Navigation is not blocked: `endMeeting` calls `navigate()` first, then fires `uploadTranscriptWithRetry` asynchronously (without `await`) so the upload continues in the background after the user has already left the page. Before calling, `endMeeting` builds an `emotionSnapshot` from `emotionsMap` (the in-memory live emotion history accumulated during the call) and saves it to `localStorage` under `emotions:<code>` and `emotionNames:<code>` for later retrieval by `TranscriptViewer.jsx`.
 - Submits `audio_files` (one `.webm` blob per recorder), `meeting_code`, and `speaker_map` (socket ID → display name map, including `"local"` → host display name) as multipart form data to `TRANSCRIPT_ENDPOINT`.
 - Retries up to `maxRetries = 3` times with exponential backoff (`2^(attempt-1) * 1000` ms). Client errors (4xx) abort immediately without retrying. If all retries are exhausted, the user is shown an `alert`.
 - Only runs when `TRANSCRIPTS_ENABLED` is truthy and `hostData.hostSecret` is present in `localStorage`.
+
+### RAG Q&A (`useRag.js`)
+
+- `index()` — `POST /api/v1/rag/:id/index`. If the server returns `indexStatus: "indexing"`, `pollUntilReady` is launched: fixed 5-second interval, up to 25 attempts (≈ 2 minutes total), then sets `indexStatus: "error"`. On `403`/`401`, polling stops immediately with `"Not authorized"`. On network error, retries the poll.
+- `query(question)` — `POST /api/v1/rag/:id/query`. Consumes the response as an SSE stream: first event carries `{ sources, sessionId }`, subsequent events carry `{ token }` which are appended to the last `assistant` message in `history`. On non-ok response, the optimistically-appended user+assistant pair is removed.
+- `clearSession()` — `DELETE /api/v1/rag/:id/session`. Resets `history` and `sessionIdRef` in the hook.
+- All state (`indexStatus`, `history`, `loading`, `indexing`, `error`) resets when `transcriptIdOrCode` changes.
 
 ### Chat (`useChat.js`)
 
@@ -232,12 +239,18 @@ sequenceDiagram
 | `useEmotionSocket.js` | Per-participant emotion socket pool |
 | `useMediaControls.js` | `toggleMute`, `toggleVideo`, `startScreenShare` |
 | `useMediaBridge.js` | Exposes `window.__MEDIA_BRIDGE__` for cross-module calls |
+| `useRag.js` | RAG index + query hook; SSE streaming; 25-attempt × 5 s poll loop; session clear |
 | `mediaController.js` | Module-level singleton: local stream, PCs, video element |
 | `mediaControllerUtils.js` | Pure helpers: `replaceTrackInPeers`, placeholder track, Safari preview |
 | `emotionHelpers.js` | Score normalisation, label validation, emoji rendering |
 | `AuthContext.jsx` | JWT auth, login, register, history, multi-endpoint fallback |
 | `TranscriptViewer.jsx` | Transcript display with speaker filter, emotion filter, search, AI summary tab |
 | `EmotionServicePanel.jsx` | Sidebar panel: per-participant emotion cards, group summary, AI insight |
+| `home.jsx — ActivityPanel` | Aggregates all transcripts: meeting count, talk time, NLP-vs-live emotion bars, discrepancy list, notable moments, top topics |
+| `home.jsx — RagPanel` | In-page RAG chat; calls `useRag`; transcript selector (up to 10); SSE streaming display; clear session button |
+| `home.jsx — RequestTranscriptPanel` | Participant-facing transcript request form; lists attended meetings with request/re-request actions and status badges |
+| `home.jsx — NotificationDrawer` | Host-facing slide-over drawer; lists pending transcript requests with approve/deny actions |
+| `home.jsx — TranscriptRequestBanner` | Toast-style banner shown to host when a new request arrives via socket |
 
 ---
 
@@ -247,30 +260,30 @@ All runtime-configurable values are read from `process.env` at module load time.
 
 | Environment Variable | Default | Used In |
 |---|---|---|
-| `REACT_APP_SIGNALING_URL` | `http://localhost:8000` | `meetConfig.js` |
-| `REACT_APP_EMOTION_SOCKET_URL` | *(required)* | `useEmotionSocket.js` |
-| `REACT_APP_TRANSCRIPT_URL` / `REACT_APP_AI_URL` | `http://localhost:5001/process_meeting` | `meetConfig.js` |
-| `REACT_APP_API_URL` | `http://localhost:8000/api/v1` | `meetConfig.js`, `home.jsx` |
-| `REACT_APP_SERVER_URL` | `http://localhost:8000` | `home.jsx` |
-| `REACT_APP_TURN_URL_UDP` | *(optional)* | `meetConfig.js` |
-| `REACT_APP_TURN_URL_80` | *(optional)* | `meetConfig.js` |
-| `REACT_APP_TURN_URL_443` | *(optional)* | `meetConfig.js` |
-| `REACT_APP_TURN_URL_443_TCP` | *(optional)* | `meetConfig.js` |
-| `REACT_APP_TURN_URL_TLS` | *(optional)* | `meetConfig.js` |
-| `REACT_APP_TURN_USERNAME` | *(optional)* | `meetConfig.js` |
-| `REACT_APP_TURN_CREDENTIAL` | *(optional)* | `meetConfig.js` |
-| `REACT_APP_NOISE_GATE_RMS` | `0.008` | `useRecording.js` |
-| `REACT_APP_NOISE_GATE_HOLD_MS` | `1500` | `useRecording.js` |
-| `REACT_APP_NOISE_GATE_SMOOTHING` | `0.8` | `useRecording.js` |
-| `REACT_APP_SPEECH_MIN_ACTIVE_MS` | `800` | `useRecording.js` |
-| `REACT_APP_SUPPORTS_GLOBAL_MEETINGS` | `true` | `AuthContext.jsx` |
+| `VITE_SIGNALING_URL` | `http://localhost:8000` | `home.jsx`, `useMeetingLifecycle.js` |
+| `VITE_EMOTION_SOCKET_URL` | `VITE_SERVER_URL` fallback, then `http://localhost:8000` | `useEmotionSocket.js` |
+| `VITE_TRANSCRIPT_URL` / `VITE_AI_URL` | `http://localhost:5001/process_meeting` | `meetConfig.js` |
+| `VITE_API_URL` | `${VITE_SERVER_URL}/api/v1` | `home.jsx` |
+| `VITE_SERVER_URL` | `http://localhost:8000` | `home.jsx`, `useRag.js`, `useEmotionSocket.js`, `TranscriptViewer.jsx` |
+| `VITE_TURN_URL_UDP` | *(optional)* | `meetConfig.js` |
+| `VITE_TURN_URL_80` | *(optional)* | `meetConfig.js` |
+| `VITE_TURN_URL_443` | *(optional)* | `meetConfig.js` |
+| `VITE_TURN_URL_443_TCP` | *(optional)* | `meetConfig.js` |
+| `VITE_TURN_URL_TLS` | *(optional)* | `meetConfig.js` |
+| `VITE_TURN_USERNAME` | *(optional)* | `meetConfig.js` |
+| `VITE_TURN_CREDENTIAL` | *(optional)* | `meetConfig.js` |
+| `VITE_NOISE_GATE_RMS` | `0.008` | `useRecording.js` |
+| `VITE_NOISE_GATE_HOLD_MS` | `1500` | `useRecording.js` |
+| `VITE_NOISE_GATE_SMOOTHING` | `0.8` | `useRecording.js` |
+| `VITE_SPEECH_MIN_ACTIVE_MS` | `800` | `useRecording.js` |
+| `VITE_SUPPORTS_GLOBAL_MEETINGS` | `true` | `AuthContext.jsx` |
 
 Feature flags (imported from `../environment`):
 - `TRANSCRIPTS_ENABLED` — gates transcript submission and the transcript list on the Home page.
 - `EMOTIONS_ENABLED` — gates all emotion capture. If falsy, `startPeriodicEmotionCapture` returns immediately.
 
 Static configuration in `meetConfig.js`:
-- `ICE_CONFIG`: STUN (`stun:stun.l.google.com:19302`) + TURN (URLs and credentials read from environment variables `REACT_APP_TURN_URL_*`, `REACT_APP_TURN_USERNAME`, `REACT_APP_TURN_CREDENTIAL`). TURN entries with an undefined URL are filtered out at build time.
+- `ICE_CONFIG`: STUN (`stun:stun.l.google.com:19302`) + TURN (URLs and credentials read from environment variables `VITE_TURN_URL_*`, `VITE_TURN_USERNAME`, `VITE_TURN_CREDENTIAL`). TURN entries with an undefined URL are filtered out at build time.
 - `EMO_CONFIG.captureIntervalMs = 3000`.
 
 ---
@@ -313,6 +326,23 @@ When video is turned off (`_turnVideoOff` in `mediaController.js`), a 16×12 px 
 
 `VideoMeet.jsx` computes `effectiveSpotlightId` as: manual pin (`spotlightPeerId`) if still present, else `stableSpeakerId` if present, else the first entry of `remoteEntries` (sorted alphabetically by peer ID). The spotlight peer is rendered in `SpotlightCard`; all others are rendered as compact `ParticipantCard` tiles in the filmstrip.
 
+### Transcript request flow (`home.jsx`)
+
+`home.jsx` maintains a persistent socket connection to `VITE_SOCKET_URL` independent of any meeting. On connect it emits `home-presence({ userId })`. This socket receives two events:
+
+- `transcript-request-received` — adds the request to `pendingRequests` (the `NotificationDrawer` list) and `bannerRequests` (the floating `TranscriptRequestBanner`). The host can approve or deny via `PATCH /api/v1/transcript-requests/:id/resolve`.
+- `transcript-request-update` — fired at the requester. Updates `myRequests` status. On `"approved"`, shows a success snack and calls `loadTranscripts(true)` to bust the cache and surface the newly accessible transcript.
+
+`RequestTranscriptPanel` filters `participatedMeetings` to exclude meetings where the user has a `host:<code>` entry in `localStorage` (i.e. only shows meetings the user attended as a participant). Denied requests can be re-submitted; the button label changes to `"Re-request"`.
+
+### `home.jsx` transcript cache
+
+Transcripts are cached in `sessionStorage` under key `tx_cache` with a 2-minute TTL (`TRANSCRIPT_CACHE_TTL = 2 * 60 * 1000` ms). On window `focus`, the cache is busted and a fresh fetch is triggered. `dedupeByCode` deduplicates by `meetingCode`, keeping the most recent entry per code. `normalizeTranscript` ensures consistent field names across API response shapes.
+
+### `home.jsx` sidebar navigation
+
+Five panels are toggled via `rightPanel` state: `"activity"` (`ActivityPanel`), `"history"` (`HistoryPanel`), `"transcripts"` (inline transcript list), `"request-transcript"` (`RequestTranscriptPanel`), and `"rag"` (`RagPanel`). The notification bell button in the sidebar is only shown when `pendingRequests.length > 0` or `reqsLoading` is true.
+
 ### Unread chat badge
 
 `VideoMeet.jsx` tracks `unreadCount`. It increments by the delta of new messages when the chat panel is not visible. It resets to 0 when the chat panel is opened. On mobile, panel visibility is determined by `mobileSheet === "chat"`.
@@ -326,6 +356,7 @@ When video is turned off (`_turnVideoOff` in `mediaController.js`), a 16×12 px 
 | Event | Payload | Description |
 |---|---|---|
 | `join-call` | `roomId, { name, userId }` | Join the room |
+| `home-presence` | `{ userId }` | Emitted from `home.jsx` on socket connect to register the user's presence on the home screen; enables server-side routing of `transcript-request-received` and `transcript-request-update` events |
 | `declare-host` | `roomCode, hostSecret, ackCallback` | Declare self as host; emitted after `assigned-role` is received from server |
 | `leave-call` | `roomId` | Leave the room |
 | `end-meeting` | `roomId` | Host leaves the meeting; server treats this as a silent leave, participants stay in meeting |
@@ -344,13 +375,15 @@ When video is turned off (`_turnVideoOff` in `mediaController.js`), a 16×12 px 
 | `existing-participants` | `useSocket.js` → creates PCs for existing peers |
 | `participants-updated` | `useSocket.js` → syncs participant list |
 | `user-joined` | `useSocket.js` → creates PC for new peer |
-| `user-left` | `useSocket.js` → calls `closePeer` and `removeAnalyzer` |
+| `user-left` | `useSocket.js` → calls `closePeer`, `removeAnalyzer`, and removes peer from `emotionsMap` |
 | `signal` | `useSocket.js` → calls `handleSignal` |
 | `chat-history` | `useSocket.js` → seeds chat state |
 | `chat-message` | `useSocket.js` → calls `handleIncomingMessage` |
 | `chat-ack` | `useSocket.js` → calls `handleAck` |
 | `update-participant-state` | `useSocket.js` → updates `participantsMeta.meta.muted` |
 | `emotion-status` | `useSocket.js` + `VideoMeet.jsx` → updates `emotionLive` state (non-host only) |
+| `transcript-request-received` | `useSocket.js` → calls `onTranscriptRequestReceived`; `home.jsx` → adds request to `pendingRequests` and `bannerRequests` |
+| `transcript-request-update` | `useSocket.js` → calls `onTranscriptRequestUpdate`; `home.jsx` → updates `myRequests` status; shows snack and refreshes transcripts on `approved` |
 | `disconnect` | `useSocket.js` → deferred cleanup after 15 s if no PCs remain |
 
 ### Emotion backend events (emitted by client)
@@ -375,6 +408,7 @@ When video is turned off (`_turnVideoOff` in `mediaController.js`), a 16×12 px 
 | Method + Path | Used In | Purpose |
 |---|---|---|
 | `POST /api/v1/rooms` | `home.jsx` | Create room, receive `roomCode` + `hostSecret` |
+| `GET /api/v1/rooms/mine` | `home.jsx` | Fetch rooms owned by authenticated user |
 | `GET /api/v1/rooms/:id` | `home.jsx` | Validate room before joining |
 | `GET /api/v1/transcripts?limit=200` | `home.jsx` | Fetch transcript list |
 | `POST TRANSCRIPT_ENDPOINT` | `useMeetingLifecycle.js` | Submit audio for transcription |
@@ -382,8 +416,12 @@ When video is turned off (`_turnVideoOff` in `mediaController.js`), a 16×12 px 
 | `POST /api/v1/users/login` | `AuthContext.jsx` | Login, receive JWT |
 | `GET /api/v1/users/me` | `AuthContext.jsx` | Hydrate user on load |
 | `POST /api/v1/auth/logout` | `AuthContext.jsx` | Server-side logout |
-| `GET /api/v1/users/get_all_activity` | `AuthContext.jsx` | Meeting history |
+| `GET /api/v1/users/get_all_activity` | `home.jsx`, `AuthContext.jsx` | Meeting history |
 | `POST /api/v1/meetings` | `AuthContext.jsx` | Record meeting (with fallback) |
+| `POST /api/v1/transcript-requests` | `home.jsx` | Submit transcript access request for a meeting |
+| `GET /api/v1/transcript-requests/host?status=pending` | `home.jsx` | Load pending requests where caller is host |
+| `GET /api/v1/transcript-requests/mine` | `home.jsx` | Load requests submitted by authenticated user |
+| `PATCH /api/v1/transcript-requests/:id/resolve` | `home.jsx` | Host approves or denies a transcript request |
 | `POST /api/v1/transcripts/:id/summary` | `TranscriptViewer.jsx` | Body: `{ emotionData, emotionNames }` read from `localStorage` keys `emotions:<code>` and `emotionNames:<code>`. Triggers Groq AI summary generation with live emotion annotation; response includes `discrepancies` array rendered inline in the OVERVIEW block. |
 
 ---
@@ -423,7 +461,7 @@ The following are observable from the implementation:
 - The host role is server-verified: `localStorage` is used only to decide whether to attempt `declare-host`. `isHost` state is set to `true` only after the server returns `{ ok: true }` in the ACK, gating all host UI and behaviour on `Meeting.verifyHostSecret` passing.
 - `home.jsx` calls `cleanInvalidHosts()` on mount to remove `localStorage` entries that lack a `hostSecret`.
 - Socket authentication for the emotion backend uses `auth: { participantId }` in the Socket.IO connect options. The value is the participant's user ID or socket ID as resolved in `useEmotionCapture.js → resolveParticipantId`.
-- TURN credentials are read entirely from environment variables (`REACT_APP_TURN_USERNAME`, `REACT_APP_TURN_CREDENTIAL`, `REACT_APP_TURN_URL_*`). No credentials are hardcoded in `meetConfig.js`.
+- TURN credentials are read entirely from environment variables (`VITE_TURN_USERNAME`, `VITE_TURN_CREDENTIAL`, `REACT_APP_TURN_URL_*`). No credentials are hardcoded in `meetConfig.js`.
 
 ---
 

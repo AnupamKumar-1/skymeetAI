@@ -1,6 +1,6 @@
 # Hoovik Backend (Node.js)
 
-A Node.js/Express HTTP and WebSocket server that manages real-time video-meeting rooms, chat, transcription storage, and user authentication. The implementation uses MongoDB for persistence, Redis for ephemeral state and distributed locking, and Socket.IO with a Redis adapter for multi-process event fan-out.
+A Node.js/Express HTTP and WebSocket server that manages real-time video-meeting rooms, chat, transcription storage, user authentication, and a RAG (Retrieval-Augmented Generation) pipeline. The implementation uses MongoDB for persistence, Redis for ephemeral state and distributed locking, Socket.IO with a Redis adapter for multi-process event fan-out, BullMQ for background indexing jobs, and Nomic + Groq APIs for embeddings and LLM inference.
 
 ---
 
@@ -51,6 +51,8 @@ The following capabilities are directly evidenced by source code:
 - **Distributed room-join serialisation** via a Redis-backed distributed mutex with retry polling (`redisLock.js`); each `join-call` runs inside `withRoomLock`.
 - **Transcript persistence** with upsert-on-conflict semantics, Redis caching (default TTL `300` seconds), and noise-line filtering (`transcript.service.js`).
 - **Transcript proxy** — forwards multipart requests to an external service at `process.env.Ts_SERVICE_URL` (`transcriptProxy.routes.js`).
+- **Transcript access requests** — participants can request host approval to view a transcript; hosts can approve or deny via `transcriptRequest.service.js`; socket notifications are sent to host and requester.
+- **RAG pipeline** — transcripts can be indexed into vector chunks (Nomic embeddings via `nomic-embed-text-v1.5`), queried via MMR-reranked semantic search, and answered by a Groq LLM (`llama-3.3-70b-versatile`); session history is persisted in `RagSession`; background indexing runs in a BullMQ worker.
 - **Latency instrumentation** using `process.hrtime.bigint()` written to a per-port log file under `logs/latency-<PORT>.log` (`latency.service.js`).
 - **Inactive meeting cleanup** running on a `setInterval` of `3,600,000` ms (1 hour) inside `meeting.model.js:cleanupOldMeetings`; removes documents with `active: false` and `updatedAt` older than 24 hours by default.
 
@@ -68,6 +70,8 @@ flowchart TD
         R_Meetings["/api/v1/meetings"]
         R_Transcripts["/api/v1/transcripts"]
         R_Proxy["/api/v1/transcripts/proxy"]
+        R_TReqs["/api/v1/transcript-requests"]
+        R_RAG["/api/v1/rag"]
     end
 
     subgraph WS ["WebSocket Layer (Socket.IO)"]
@@ -78,6 +82,8 @@ flowchart TD
     subgraph Services
         US[user.service.js]
         TS[transcript.service.js]
+        TRS[transcriptRequest.service.js]
+        RAGS[rag.service.js]
     end
 
     subgraph Repositories ["Data-Access"]
@@ -85,6 +91,7 @@ flowchart TD
         TR[transcript.repository.js]
         SR[socket.repository.js]
         RR[rooms.repository.js]
+        TRR[transcriptRequest.repository.js]
     end
 
     subgraph Infra
@@ -92,9 +99,12 @@ flowchart TD
         Redis[(Redis)]
         Lock[redisLock.js]
         RU[redis.utils.js]
+        BullMQ[BullMQ Worker]
     end
 
     ExtTS["External Transcript Service\n(Ts_SERVICE_URL)"]
+    Nomic["Nomic Embedding API"]
+    Groq["Groq LLM API"]
 
     Client -- "REST" --> HTTP
     Client -- "ws/wss" --> WS
@@ -104,6 +114,8 @@ flowchart TD
     R_Transcripts --> TS
     R_Rooms --> RR
     R_Proxy --> ExtTS
+    R_TReqs --> TRS
+    R_RAG --> RAGS
 
     SC --> SS
     SS --> SR
@@ -111,17 +123,23 @@ flowchart TD
 
     US --> UR
     TS --> TR
+    TRS --> TRR
+    RAGS --> BullMQ
 
     UR --> Mongo
     TR --> Mongo
     SR --> Mongo
     RR --> Mongo
+    TRR --> Mongo
 
     SS --> RU
     US --> RU
     TS --> RU
     RU --> Redis
     Lock --> Redis
+    BullMQ --> Nomic
+    BullMQ --> Mongo
+    RAGS --> Groq
 ```
 
 ### Process Model
@@ -213,7 +231,7 @@ sequenceDiagram
         else new participant
             SS->>Mongo: addParticipant(...)
         end
-        SS->>Redis: setState / setParticipants
+        SS->>Redis: setState / safeRedisHSet (single field)
         SS->>Mongo: meeting.save() [active=true]
         SS-->>C: emit("existing-participants", peers)
         SS-->>C: emit("assigned-role", {polite})
@@ -232,8 +250,10 @@ sequenceDiagram
 Entry point. Configures:
 - `trust proxy: 1` for correct IP extraction behind a reverse proxy.
 - CORS allowlist: `http://localhost:3000` is always allowed and one production origin can be supplied via `CLIENT_ORIGIN`. Supporting multiple production origins currently requires code changes.
-- Route mounting order (proxy route registered before the generic transcript route to prevent shadowing).
+- Route mounting order (proxy route registered before the generic transcript route to prevent shadowing; `transcript-requests` and `rag` routes also mounted).
 - Sequential startup: MongoDB → Redis → HTTP listen → Socket.IO init.
+- A catch-all `404` handler for unmatched `/api` routes.
+- A global Express error middleware returning `{ success: false, message }`.
 
 ### `src/infra/redis.js`
 
@@ -244,26 +264,28 @@ Creates three `redis` v4/v5 clients (`redisClient`, `redisPub`, `redisSub`) with
 Implements a Redis-backed distributed mutex:
 - Acquire: `SET key token NX PX <LOCK_TTL_MS>` — default TTL `10,000` ms (env `REDIS_LOCK_TTL_MS`).
 - Release: Lua CAS script — only deletes the key if the stored value matches the caller's token.
-- Max wait: `REDIS_LOCK_MAX_WAIT_MS` (default `8,000` ms); throws `Error("timeout acquiring lock")` on expiry.
+- Max wait: `REDIS_LOCK_MAX_WAIT_MS` (default `8,000` ms); throws `Error("timeout acquiring lock for room: <code>")` on expiry.
 - Retry interval: `50 ms + 0–50 ms jitter`.
 
 ### `src/services/socket.service.js`
 
 Contains all socket business logic. Participant state is maintained in two Redis structures per room:
 - `meeting:state:<code>` — a String key holding a JSON array of socket IDs (join order).
-- `meeting:participants:<code>` — a Redis Hash where each field is a `userId` and each value is the JSON-serialised `{socketId, userId, meta}` object. Writes are targeted: join and reconnect call `HSET` for the single affected field; leave calls `HDEL` for the departing field (or `DEL` for the whole key when the room empties). Only `getParticipants` (used by `broadcastParticipants`) reads the full Hash via `HGETALL`. Meta updates in `handleUpdateParticipantState` and `handleUpdateMeta` fetch and rewrite only the single affected Hash field.
+- `meeting:participants:<code>` — a Redis Hash where each field is a `userId` and each value is the JSON-serialised `{socketId, userId, meta}` object. Writes are targeted: join and reconnect call `safeRedisHSet` for the single affected field; leave calls `safeRedisHDel` for the departing field (or `safeRedisDel` for the whole key when the room empties). Only `getParticipants` (used by `broadcastParticipants`) reads the full Hash via `safeRedisHGetAllResult`. Meta updates in `handleUpdateParticipantState` and `handleUpdateMeta` fetch and rewrite only the single affected Hash field.
 
 Room capacity is enforced at `MAX_PARTICIPANTS_PER_ROOM` (default `50`, env override).
 
-Emotion AI state is tracked per room in Redis under the key `emotion:active:<code>` via three helpers (`getEmotionState`, `setEmotionState`, `deleteEmotionState`). State is therefore consistent across all pm2 processes; there is no longer an in-process `roomEmotionState` Map.
+Emotion AI state is tracked per room in Redis under the key `emotion:active:<code>` via three helpers (`getEmotionState`, `setEmotionState`, `deleteEmotionState`) defined in `socket.controller.js`. State is therefore consistent across all pm2 processes; there is no in-process `roomEmotionState` Map.
 
 Chat messages are rate-limited per `userId` via `isSocketRateLimited`, which uses `safeRedisIncr` + `safeRedisExpire` (two separate commands, not a Lua script): `SOCKET_CHAT_RATE_MAX` requests (default `20`) per `SOCKET_CHAT_RATE_WIN_SEC` seconds (default `10`). Redis key: `socket:chat:rate:<userId>`.
+
+Transcription/binary chunks are also rate-limited: `SOCKET_CHUNK_RATE_MAX` (default `100`) per `SOCKET_CHUNK_RATE_WIN_SEC` (default `10` s) per `userId`. Redis key: `socket:chunk:rate:<userId>`.
 
 Partial upload state is tracked via:
 - `partial:<key>` — binary data key.
 - `partial:meta:<key>` — JSON metadata; TTL `PARTIAL_UPLOAD_TTL_SEC` (derived from `PARTIAL_UPLOAD_TTL_MS`, default `600,000` ms → `600` seconds via `Math.ceil`).
 
-**Redis null-guards**: `handleJoinCall`, `handleLeave`, `broadcastParticipants`, and `getPartialMeta` call sites explicitly check for the `REDIS_READ_FAILED` sentinel returned by `safeRedisGetResult`. On a Redis failure, `handleJoinCall` emits an `"error"` to the socket and aborts instead of proceeding with fabricated empty participant state; `handleLeave` guards `stateArr` before mutation; `broadcastParticipants` skips the emit when Redis is unavailable. Redis failures are logged as warnings rather than being silently swallowed.
+**Redis null-guards**: `handleJoinCall`, `handleLeave`, `broadcastParticipants`, and `getPartialMeta` call sites explicitly check for the `REDIS_READ_FAILED` sentinel returned by `safeRedisGetResult` / `safeRedisHGetAllResult`. On a Redis failure, `handleJoinCall` emits an `"error"` to the socket and aborts instead of proceeding with fabricated empty participant state; `handleLeave` guards `stateArr` before mutation; `broadcastParticipants` skips the emit when Redis is unavailable. Redis failures are logged as warnings rather than being silently swallowed.
 
 ### `src/services/transcript.service.js`
 
@@ -271,7 +293,8 @@ Partial upload state is tracked via:
 - **Max text length**: `TRANSCRIPT_MAX_TEXT_LENGTH` (default `500,000` characters).
 - **Cache**: Redis TTL `TRANSCRIPT_CACHE_TTL_SEC` (default `300` seconds); separate keys for by-`_id` (`transcript:cache:<id>`) and by-`meetingCode` (`transcript:cache:code:<code>`) lookups.
 - **Rate limiting**: `TRANSCRIPT_RATE_LIMIT_MAX` (default `30`) requests per `TRANSCRIPT_RATE_LIMIT_WIN_SEC` (default `60`) seconds per `userId`. Implemented via `safeRedisIncr` + `safeRedisExpire` (two commands, not a Lua script). Redis key: `transcript:rate:<uid>`.
-- **AI summary generation** (`generateAiSummaryService`): calls Groq (`https://api.groq.com/openai/v1/chat/completions`) with model `llama-3.1-8b-instant`. The prompt is built by `buildGroqPrompt` from two sources: (1) `metadata.segments` — Whisper NLP output with speaker label, timestamp, and `nlp_emotion` per segment; and (2) optional live emotion data (`emotionData`, `emotionNames`) sent in the request body by the client from `localStorage`. Speaker identity resolution is performed by `buildSpeakerLiveMap`, which normalises display names and matches Whisper diarization labels to participant user IDs via exact then prefix name comparison. Each segment is annotated with the matched participant's live facial/audio emotion events captured within that segment's time window; unresolved speakers include all participants' events as `live_unmatched=[]` so the model can reason from context. The prompt instructs the model to identify discrepancies where `nlp_emotion` contradicts live capture. The response JSON includes `discrepancies` (array of `{ participant, at_sec, said, nlp_emotion, live_emotion, modality, note }`), `live_dominant_emotion` per speaker in `speaker_stats`, and the standard `summary`, `key_points`, `insights`, and `emotional_moments` fields. Response is parsed as JSON and saved to `Transcript.aiSummary` via `findByIdAndUpdate($set)`; both by-`_id` and by-`meetingCode` Redis cache keys are invalidated on save.
+- **Transcript access grants**: `getTranscriptService` and `listTranscriptsService` also check `TranscriptRequest` documents with `status: "approved"` for the requesting `userId`; approved requesters can read transcripts they don't own.
+- **AI summary generation** (`generateAiSummaryService`): calls Groq (`https://api.groq.com/openai/v1/chat/completions`) with model `llama-3.1-8b-instant`. The prompt is built by `buildGroqPrompt` from two sources: (1) `metadata.segments` — Whisper NLP output with speaker label, timestamp, and `nlp_emotion` per segment; and (2) optional live emotion data (`emotionData`, `emotionNames`) sent in the request body by the client. Speaker identity resolution is performed by `buildSpeakerLiveMap`, which normalises display names and matches Whisper diarization labels to participant user IDs via exact then prefix name comparison. Each segment is annotated with the matched participant's live facial/audio emotion events captured within that segment's time window; unresolved speakers include all participants' events as `live_unmatched=[]`. The prompt instructs the model to identify discrepancies where `nlp_emotion` contradicts live capture. The response JSON includes `discrepancies` (array of `{ participant, at_sec, said, nlp_emotion, live_emotion, modality, note }`), `live_dominant_emotion` per speaker in `speaker_stats`, and the standard `summary`, `key_points`, `insights`, and `emotional_moments` fields. Response is parsed as JSON inside a dedicated `try/catch`; if the model returns malformed output, the error is logged with the first 200 characters of the raw response and the service returns `502` with `"AI provider returned invalid response"` rather than propagating the parse exception. Parsed result is saved to `Transcript.aiSummary` via `findByIdAndUpdate($set)`; both by-`_id` and by-`meetingCode` Redis cache keys are invalidated on save.
 - **AI summary rate limiting**: `AI_SUMMARY_RATE_LIMIT_MAX` (default `2`) requests per `AI_SUMMARY_RATE_LIMIT_WIN_SEC` (default `7,200`) seconds per `userId`; Redis key `transcript:aisummary:rate:<uid>`. Applied to both `generateAiSummaryService` and `updateAiSummaryService`. Implemented via `safeRedisIncr` + `safeRedisExpire`.
 
 ### `src/services/user.service.js`
@@ -286,6 +309,25 @@ Partial upload state is tracked via:
 - **Username enumeration prevention**: `loginService` returns `401 Unauthorized` with `"Invalid username or password."` for both unknown-username and wrong-password cases.
 - **Refresh token flow**: `issueTokens()` generates both a signed JWT access token and a 40-byte opaque refresh token. `loginService` stores the refresh token in Redis (`refresh:<token>` → user payload, TTL `REFRESH_TOKEN_TTL_SEC`, default `7` days) and delivers it via `HttpOnly` `Set-Cookie` only — it is not included in the response body. `refreshTokenService` reads the token from the `HttpOnly` cookie, validates it, rotates it (old token deleted, new pair issued), and returns a fresh access token; the new refresh token is again delivered via `HttpOnly` cookie only. `logoutService` deletes the refresh token associated with the cookie from Redis in addition to blacklisting the access token.
 
+### `src/services/transcriptRequest.service.js`
+
+Manages transcript access requests from participants to meeting hosts:
+- `requestTranscriptService`: validates the meeting and transcript exist, prevents the host from requesting their own transcript, handles re-submission of denied requests, notifies the host via socket (`notifyHostOfTranscriptRequest`).
+- `resolveRequestService`: verifies the caller is the meeting's host (by `ownerId` or `hostId`), updates status to `"approved"` or `"denied"`, notifies the requester via socket (`notifyUserOfResolution`).
+- `listPendingRequestsService`: returns all requests where the caller is host, with a `pendingCount`.
+- `myRequestsService`: returns all requests submitted by the authenticated user.
+
+### `src/services/rag.service.js`
+
+Implements a full RAG pipeline on top of indexed transcripts:
+- **Chunking**: if `metadata.segments` exists, builds segment-based chunks with speaker attribution and timestamps; otherwise builds sliding-window word chunks. Summary chunks are built from `aiSummary` fields. Chunk size: `RAG_CHUNK_TOKENS` (default `600` tokens estimated as `length / 4`); overlap: `RAG_CHUNK_OVERLAP` (default `100` tokens).
+- **Embedding**: uses Nomic API (`nomic-embed-text-v1.5`) in batches of 96; embeddings are cached in Redis (`rag:embed:<sha256>`, TTL 7 days).
+- **Background indexing**: `indexTranscriptService` enqueues a BullMQ job (`transcriptIndexing` queue); the `indexWorker` Worker processes it asynchronously, deletes old `RagChunk` documents, inserts new ones via `insertMany`, and writes status/checksum to Redis. Status key: `rag:index:status:<transcriptId>`. Duplicate indexing is detected via a SHA-256 checksum of `rawText + segments + aiSummary`.
+- **Retrieval**: `retrieveChunks` uses MongoDB `$vectorSearch` against `vector_index` on the `embedding` field. The ANN candidate pool size is `Math.max(RETRIEVAL_TOP_K, vectorLimit * 10, 100)` where `vectorLimit = Math.max(MMR_FINAL_K * 2, 10)`; `$vectorSearch` returns up to `vectorLimit` documents, which are then re-ranked with MMR (`RAG_MMR_LAMBDA` default `0.6`, `RAG_MMR_FINAL_K` default `5`).
+- **LLM answering**: uses Groq (`llama-3.3-70b-versatile`); supports streaming (SSE) when `res.write` is available. Session history is tracked in `RagSession` (TTL: 24 h via MongoDB TTL index on `lastActivityAt`); context window: `SESSION_CONTEXT_WINDOW` (default `30` messages, sliced to last 30).
+- **Rate limiting**: index — `RAG_INDEX_RATE_MAX` (default `5`) per `RAG_INDEX_RATE_WIN_SEC` (default `3,600` s); query — `RAG_QUERY_RATE_MAX` (default `20`) per `RAG_QUERY_RATE_WIN_SEC` (default `3,600` s).
+- **Authorization**: same `isAuthorized` check as transcript service; legacy docs (no `ownerId` and no `hostSecretHash`) are accessible without auth; approved `TranscriptRequest` records also grant access.
+
 ### `src/observability/latency/latency.service.js`
 
 Writes a structured latency log line per measured operation to `logs/latency-<PORT>.log`. On process start, the file is **not** truncated; a `[PROCESS START]` separator is appended so runs remain distinguishable in a single file. Entries from previous runs are preserved across restarts. Measurements use `process.hrtime.bigint()` for nanosecond resolution, converted to milliseconds.
@@ -294,16 +336,20 @@ Writes a structured latency log line per measured operation to `logs/latency-<PO
 
 Mongoose model with instance methods:
 - `addParticipant` — upserts by `socketId` or `userId`; sets `active = true`, updates `lastActivityAt`.
-- `markParticipantLeft` — two atomic `updateOne` calls: first sets `participants.$.leftAt`; second uses a `$expr` filter to set `active = false` only when no participant remains without a `leftAt`. Returns the updated document via a final `findById`, replacing what was previously a three-round-trip read-then-write-then-read pattern with two targeted writes plus one read.
+- `markParticipantLeft` — two atomic `updateOne` calls: first sets `participants.$.leftAt`; second uses a `$expr` filter to set `active = false` only when no participant remains without a `leftAt`. Returns the updated document via a final `findById`.
 - `restoreParticipant` — finds a participant with a matching `userId` or `name` (within a 5-minute cutoff) that has `leftAt` set.
+- `removeParticipant` — `$pull` the participant by `socketId`; sets `active = false` if no participants remain.
+- `updateParticipantMeta` — merges `metaUpdate` into the participant's `meta` by `socketId`.
 - `addChatMessage` — appends to `chat`; trims array to last `500` messages.
+- `updateAnalytics` — merges `data` into `analytics`.
+- `setHostSecretHash` — hashes `rawSecret` with sha256 and saves.
 - `cleanupOldMeetings` (static) — deletes where `active: false` and `updatedAt < now - maxAgeHours * 3,600,000`.
 - `verifyHostSecret` (static) — looks up the meeting by `meetingCode`, rejects if absent or if `hostSecretExpiresAt` is set and has passed, then compares a `sha256` hash of the provided secret against `hostSecretHash`; returns the meeting document on match, `null` otherwise.
 - `upsertByMeetingCode` (static) — `findOneAndUpdate` with `{ $set: payload }` and `upsert: true`; uses `$set` explicitly to prevent document replacement on existing meetings.
 
 ### `src/utils/redis.utils.js`
 
-Provides safe wrappers for all Redis operations (`safeRedisGet`, `safeRedisGetResult`, `safeRedisSet`, `safeRedisDel`, `safeRedisIncr`, `safeRedisExpire`, `batchDel`) that catch exceptions, log a warning, and return `null`. Also exports `makeLogger` (structured JSON logger) and `isRateLimited` (atomic Lua INCR+EXPIRE script used by `user.service.js` for login and registration rate limiting).
+Provides safe wrappers for all Redis operations (`safeRedisGet`, `safeRedisGetResult`, `safeRedisSet`, `safeRedisDel`, `safeRedisIncr`, `safeRedisExpire`, `safeRedisHGetAllResult`, `safeRedisHSet`, `safeRedisHDel`, `batchDel`) that catch exceptions, log a warning, and return `null`. Also exports `makeLogger` (structured JSON logger) and `isRateLimited` (atomic Lua INCR+EXPIRE script used by `user.service.js` for login and registration rate limiting).
 
 ### `src/utils/helpers.utils.js`
 
@@ -318,7 +364,8 @@ Stateless utility functions: `sleep`, `hashBuffer`, `hashFile`, `sha256Hex` (use
 | Key path | Default | Description |
 |---|---|---|
 | `upload.baseDir` | `"meet_uploads"` | Subdirectory under `os.tmpdir()` for partial uploads |
-| `upload.maxChunks` | `50000` | Max chunks per upload session |
+| `upload.maxChunks` | `50000` (in-code fallback; override in `config.json`) | Max chunks per upload session |
+| `upload.chunkSeqMin` | `0` | Minimum chunk sequence number |
 | `sanitize.maxNameLength` | `200` | Participant display name character limit |
 | `sanitize.maxChatLength` | `2000` | Chat message character limit |
 | `sanitize.maxTranscriptionChunkLength` | `500` | Per-chunk transcription character limit |
@@ -326,6 +373,13 @@ Stateless utility functions: `sleep`, `hashBuffer`, `hashFile`, `sha256Hex` (use
 | `sanitize.defaultName` | `"Guest"` | Fallback display name |
 | `socket.transports` | `["websocket","polling"]` | Socket.IO transport list |
 | `socket.allowEIO3` | `true` | Engine.IO v3 compatibility |
+| `emotionClients.reconnectionAttempts` | `5` | Client reconnection attempts |
+| `emotionClients.reconnectionDelay` | `1000` | Reconnection delay ms |
+| `emotion.retryAttempts` | `3` | Emotion service retry count |
+| `emotion.retryTransientCodes` | `[...]` | Error codes triggering retry |
+| `emotion.retryBaseDelayMs` | `500` | Base retry delay ms |
+| `emotion.defaultType` | `"audio"` | Default emotion capture type |
+| `emotion.redisKeys.*` | various | Redis key prefixes for emotion pipeline |
 | `redisKeys.meetingStatePrefix` | `"meeting:state:"` | Redis key prefix for socket-ID arrays |
 | `redisKeys.meetingParticipantsPrefix` | `"meeting:participants:"` | Redis key prefix for participant maps |
 | `redisKeys.partialPrefix` | `"partial:"` | Redis key prefix for partial upload data |
@@ -369,7 +423,8 @@ Stateless utility functions: `sleep`, `hashBuffer`, `hashFile`, `sha256Hex` (use
 | `TRANSCRIPT_NOISE_MAX_CHAR_REPEAT` | `4` | Maximum consecutive identical-char run before a word is flagged |
 | `TRANSCRIPT_NOISE_MIN_ALPHA_RATIO` | `0.6` | Minimum alpha-character ratio for noise filter |
 | `TRANSCRIPT_NOISE_MIN_LINES` | `1` | Minimum clean lines required after noise filtering |
-| `GROQ_API_KEY` | — | Groq API key for AI summary generation; required for `POST /:id/summary` |
+| `GROQ_API_KEY` | — | Groq API key for AI summary generation and RAG LLM queries; required for `POST /:id/summary` and `POST /rag/:id/query` |
+| `NOMIC_API_KEY` | — | Nomic API key for RAG embedding; required for `POST /rag/:id/index` and `POST /rag/:id/query` |
 | `AI_SUMMARY_RATE_LIMIT_MAX` | `2` | AI summary requests per window per user |
 | `AI_SUMMARY_RATE_LIMIT_WIN_SEC` | `7200` | AI summary rate limit window in seconds |
 | `METRIC_TTL_SEC` | `2592000` (30 days) | TTL applied to `transcript:requests:*` metric counters on first increment; counters reset after this period |
@@ -385,6 +440,20 @@ Stateless utility functions: `sleep`, `hashBuffer`, `hashFile`, `sha256Hex` (use
 | `MAX_NAME_LEN` | `100` | Max user name length in user.service.js |
 | `MAX_USERNAME_LEN` | `50` | Max username length |
 | `MAX_MEETINGCODE_LEN` | `32` | Max meeting code length |
+| `RAG_CHUNK_TOKENS` | `600` | Target token count per RAG chunk |
+| `RAG_CHUNK_OVERLAP` | `100` | Token overlap between adjacent chunks |
+| `RAG_RETRIEVAL_TOP_K` | `30` | Candidate pool size before MMR reranking |
+| `RAG_MMR_LAMBDA` | `0.6` | MMR relevance vs diversity trade-off |
+| `RAG_MMR_FINAL_K` | `5` | Final chunks returned after MMR |
+| `RAG_LLM_MODEL` | `llama-3.3-70b-versatile` | Groq model for RAG answers |
+| `RAG_EMBED_MODEL` | `nomic-embed-text-v1.5` | Nomic embedding model |
+| `RAG_LLM_MAX_TOKENS` | `1024` | Max tokens for LLM answer |
+| `RAG_LLM_TEMPERATURE` | `0.2` | LLM temperature for RAG answers |
+| `RAG_SESSION_CONTEXT_WINDOW` | `30` | Max messages kept in RAG session history |
+| `RAG_QUERY_RATE_MAX` | `20` | RAG queries per rate window per user |
+| `RAG_QUERY_RATE_WIN_SEC` | `3600` | RAG query rate limit window in seconds |
+| `RAG_INDEX_RATE_MAX` | `5` | RAG index requests per rate window per user |
+| `RAG_INDEX_RATE_WIN_SEC` | `3600` | RAG index rate limit window in seconds |
 
 ---
 
@@ -475,7 +544,7 @@ When a socket emits `join-call` with a `userId` already present in the Redis par
 1. Retrieves the old socket ID from the map.
 2. Removes the old socket ID from the state array.
 3. Calls `io.sockets.sockets.get(oldSocketId)` and, if found, sets `replaced = true`, removes listeners, replaces `emit` with a no-op, and calls `disconnect(true)`.
-4. Updates the map entry with the new socket ID.
+4. Updates the map entry with the new socket ID via `safeRedisHSet`.
 5. Calls `meeting.restoreParticipant(...)` instead of `addParticipant`.
 
 The `disconnect` handler in `socket.controller.js` returns early if `socket.data.replaced === true`, preventing a double-leave.
@@ -540,8 +609,8 @@ Service-level rate limit: 30 requests per 60 seconds per `userId` (tracked in Re
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | `POST` | `/` | Optional JWT (`aAuth`) | Body: `{ meetingCode, transcriptText, fileName?, metadata? }`. Requires `x-host-secret` header or valid JWT. |
-| `GET` | `/` | Optional JWT (`aAuth`) | Query: `meeting_code?`, `limit?`. Returns `{ transcripts }`. List query uses `{ ownerId: userId }` if JWT present, else `{ hostSecretHash: secretHash }`. |
-| `GET` | `/:id` | Optional JWT (`aAuth`) | `id` may be a MongoDB ObjectId or `meetingCode`. Returns `{ transcript }` |
+| `GET` | `/` | Optional JWT (`aAuth`) | Query: `meeting_code?`, `limit?`. Returns `{ transcripts }`. List query uses `{ ownerId: userId }` if JWT present, else `{ hostSecretHash: secretHash }`. Also includes transcripts from approved `TranscriptRequest` records. |
+| `GET` | `/:id` | Optional JWT (`aAuth`) | `id` may be a MongoDB ObjectId or `meetingCode`. Returns `{ transcript }`. Also accessible via approved `TranscriptRequest`. |
 | `POST` | `/:id/summary` | Optional JWT (`aAuth`) | Body: `{ emotionData?, emotionNames? }` — live emotion snapshot from `localStorage` keyed by participant user ID. Generates AI summary via Groq (`llama-3.1-8b-instant`) from `metadata.segments` annotated with live emotion events per segment; identifies NLP-vs-live discrepancies; saves full result (including `discrepancies` array) to `aiSummary` field. Rate limited: 2 per 2 hours per user. |
 | `PATCH` | `/:id/summary` | Optional JWT (`aAuth`) | Saves a pre-built `aiSummary` object to the transcript; invalidates Redis cache. Rate limited: 2 per 2 hours per user. |
 
@@ -550,6 +619,27 @@ Service-level rate limit: 30 requests per 60 seconds per `userId` (tracked in Re
 | Method | Path | Description |
 |---|---|---|
 | `POST` | `/` or `/process_meeting` | Accepts `multipart/form-data`; proxies to `Ts_SERVICE_URL`. Passes `x-host-secret` and `x-user-token` headers. |
+
+### Transcript Request Routes — `/api/v1/transcript-requests`
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| `POST` | `/` | JWT (required) | Body: `{ meetingCode }`. Creates or re-submits a transcript access request; notifies host via socket. |
+| `GET` | `/mine` | JWT (required) | Returns all requests submitted by the authenticated user. |
+| `GET` | `/host` | JWT (required) | Returns requests where the caller is host. Query: `status?` (default `"pending"`). Also returns `pendingCount`. |
+| `PATCH` | `/:id/resolve` | JWT (required) | Body: `{ status: "approved" \| "denied" }`. Host only. Notifies requester via socket. |
+
+### RAG Routes — `/api/v1/rag`
+
+Route-level rate limit: 200 requests per 60 seconds per IP.
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| `POST` | `/:id/index` | Optional JWT | Enqueues background indexing of transcript into vector chunks. Returns `202` when indexing starts, `200` when already ready with same checksum, `409` when already in progress. |
+| `GET` | `/:id/index` | Optional JWT | Returns `{ indexStatus, chunkCount, transcriptId, meetingCode }`. Status: `not_indexed`, `indexing`, `ready`, `failed`, `no_content`. |
+| `POST` | `/:id/query` | Optional JWT | Body: `{ question }`. Returns `{ answer, sources, sessionId, latencyMs }`. Supports SSE streaming. Rate limited: 20/hour per user. |
+| `GET` | `/:id/session` | Optional JWT | Returns the current RAG session messages and token usage for the authenticated user. |
+| `DELETE` | `/:id/session` | Optional JWT | Clears the RAG session for the authenticated user. |
 
 ---
 
@@ -561,6 +651,7 @@ All events are handled in `socket.controller.js`, which delegates to `socket.ser
 
 | Event | Payload | Description |
 |---|---|---|
+| `home-presence` | `{ userId }` | Sets `socket.data.userId` for sockets on the home screen (not in a meeting). |
 | `join-call` | `(meetingCode: string, meta: object)` | Join a room. `meta` may include `{ name, userId, muted, video, screen }`. |
 | `declare-host` | `(meetingCode: string, hostSecret: string, ack?)` | Verifies `hostSecret` against `hostSecretHash` via `Meeting.verifyHostSecret`; sets `socket.data.isHost = true` on success. Ack receives `{ ok: true }` or `{ ok: false, reason: "invalid_code" \| "not_in_room" \| "unauthorized" }`. |
 | `update-participant-state` | `{ muted?: boolean, screen?: boolean }` | Updates mute/screen state in Redis and MongoDB; broadcasts to room. |
@@ -570,9 +661,9 @@ All events are handled in `socket.controller.js`, which delegates to `socket.ser
 | `transcription-update` | `(chunk: string)` | Relays sanitised chunk to room; persists to `meeting.analytics.transcription`. |
 | `keywords-update` | `(keywords: string[])` | Relays sanitised keywords to room; persists to `meeting.analytics.keywords`. |
 | `leave-call` | `(meetingCode: string)` | Marks participant left; emits `user-left` to room. |
-| `end-meeting` | `(meetingCode: string)` | Host only (`socket.data.isHost` checked); deletes the `emotion:active:<code>` Redis key and calls `handleLeave` for the host — participants are NOT notified, their meeting continues. Non-host sockets receive a warning and the event is dropped. |
+| `end-meeting` | `(meetingCode: string)` | Host only (`socket.data.isHost` checked); deletes the `emotion:active:<code>` Redis key and calls `handleLeave` for the host — other participants are NOT ejected. Non-host sockets receive a warning and the event is dropped. |
 | `emotion-status` | `{ active: boolean }` | Host only (`socket.data.isHost` checked); writes `active` to `emotion:active:<code>` in Redis via `setEmotionState` and broadcasts `emotion-status` to all non-host sockets in the room. |
-| `get-emotion-status` | _(no payload)_ | Returns current emotion AI state for the room to the requesting socket via `emotion-status` emit. Reads from Redis (`getEmotionState`); defaults to `false` if no entry exists. |
+| `get-emotion-status` | _(no payload)_ | Returns current emotion AI state for the room to the requesting socket via `emotion-status` emit. Reads from Redis (`getEmotionState`); defaults to `false` if no entry exists. If the socket has not yet joined a room, defers the reply until after the next `join-call` event (200 ms delay). |
 
 ### Server → Client
 
@@ -592,6 +683,8 @@ All events are handled in `socket.controller.js`, which delegates to `socket.ser
 | `keywords-update` | `{ from, keywords }` | Broadcast to room excluding sender. |
 | `signal` | `(fromSocketId, message)` | Forwarded to target socket after verifying `targetId` is in the same room via `fetchSockets()`. |
 | `emotion-status` | `{ active: boolean }` | Broadcast to non-host sockets when host toggles emotion AI; also emitted to a single socket in response to `get-emotion-status`. |
+| `transcript-request-received` | `{ requestId, meetingCode, requesterId, requesterName }` | Emitted to the host socket when a participant submits or re-submits a transcript access request. |
+| `transcript-request-update` | `{ requestId, meetingCode, status }` | Emitted to the requester's socket(s) when the host resolves a request. |
 | `error` | `string` | Emitted on validation failure or unhandled error. |
 
 ---
@@ -602,12 +695,14 @@ The following are implementation-level observations, not benchmarks:
 
 - **Redis caching** is applied to: user objects, meeting history, meetings list, and transcript lookups. Cache TTLs are configurable via environment variables; see the configuration table above.
 - **`getParticipants` / participant writes** — `getParticipants` calls `HGETALL` and is used only for full-room broadcasts. Join, reconnect, meta updates, and leave all use targeted `HSET` or `HDEL` on the individual Hash field, so write payload is bounded to a single serialised participant object regardless of room size.
-- **`addParticipant` and `markParticipantLeft`** — `addParticipant` issues a `findOne` + `save` per event. `markParticipantLeft` issues two targeted `updateOne` calls followed by a `findById` to return the updated document, replacing a previous three-round-trip read-then-write pattern with two writes plus one read.
+- **`addParticipant` and `markParticipantLeft`** — `addParticipant` issues a `findOne` + `save` per event. `markParticipantLeft` issues two targeted `updateOne` calls followed by a `findById` to return the updated document.
 - **`broadcastParticipants`** debounces at `150 ms` per room, reducing redundant `getParticipants` Redis reads under burst join/meta-update traffic.
 - **`setInterval` cleanup** in `meeting.model.js` runs every `3,600,000` ms. This is a process-local timer; in multi-process deployments all three pm2 processes execute it independently.
 - **Transcript noise filter** runs synchronously in the service layer before any DB or Redis I/O; complexity is O(n) in transcript line count.
 - **`SOCKET_MAX_HTTP_BUFFER`** defaults to `100 MiB`, accommodating binary chunk uploads over the WebSocket connection.
 - **Partial uploads** are bounded by `PARTIAL_UPLOAD_MAX_BYTES` (default `200 MiB`) and expire after `PARTIAL_UPLOAD_TTL_MS` (default `600,000` ms).
+- **RAG embedding cache** stores Nomic vectors in Redis (`rag:embed:<sha256>`, TTL 7 days), avoiding redundant embedding API calls for identical text.
+- **RAG indexing** uses BullMQ to offload chunk parsing and batch embedding from the HTTP request cycle; `$vectorSearch` with MMR reranking retrieves the most relevant and diverse chunks per query.
 
 ---
 
@@ -621,7 +716,7 @@ The following are implementation-level observations, not benchmarks:
 { "level": "info|warn|error", "service": "<name>", "msg": "<message>", "<key>": "<value>", "ts": "<ISO8601>" }
 ```
 
-Services using this logger: `user`, `transcript`, `socket`, `redis`.
+Services using this logger: `user`, `transcript`, `socket`, `redis`, `rag`, `transcript-request`.
 
 ### Latency Log
 
@@ -638,6 +733,8 @@ Instrumented labels (defined in `latency.constants.js`):
 | `SOCKET_JOIN` | `"socket.join"` | `handleJoinCall` exit, `POST /rooms` |
 | `SOCKET_MESSAGE` | `"socket.message"` | `handleChatMessage` exit |
 | `SOCKET_SIGNAL` | `"socket.signal"` | `signal` event handler |
+| `ERROR` | `"error"` | defined but not currently wired |
+| `INFO` | `"info"` | defined but not currently wired |
 
 On each process start a `[PROCESS START]` marker is appended to the log file; entries from previous runs are retained. No automatic log rotation or archival is implemented.
 
@@ -664,6 +761,7 @@ On each process start a `[PROCESS START]` marker is appended to the log file; en
 - **Transcript duplicate key (`11000`)**: `createTranscriptDoc` uses `findOneAndUpdate` with `upsert: true` as its primary write path, avoiding most race-condition conflicts. If the upsert itself throws a duplicate-key error (`11000`) due to a concurrent write race, the catch block falls back to `findOne` to return the existing document.
 - **MongoDB connection failure at startup**: `process.exit(1)`.
 - **Redis connection failure at startup**: `process.exit(1)`.
+- **BullMQ worker failure**: logged via `indexWorker.on("failed", ...)` with job ID and error message; Redis status key is set to `"failed"` with a 1-hour TTL.
 
 ---
 
@@ -678,7 +776,7 @@ The following mitigations are implemented in source:
 - **Per-IP registration rate limiting** via the same Lua script.
 - **Input sanitisation**: `sanitize-html` is applied to chat messages, participant names, transcription chunks, and keywords.
 - **Meeting code validation**: regex `^[A-Z0-9\-]{3,32}$` enforced at both socket and transcript service layers.
-- **Host secret**: stored as `sha256` hash only; raw secret returned once at room creation (`POST /rooms`) and never persisted. On subsequent `upsertMeeting` calls the secret is not regenerated. The `declare-host` socket event verifies the provided raw secret against the stored hash via `Meeting.verifyHostSecret` before granting host status; unverified claims are rejected with a reason code. The frontend sets `isHost` state only after receiving a successful ACK from `declare-host`, so host UI and host actions are both gated on server verification.
+- **Host secret**: stored as `sha256` hash only; raw secret returned once at room creation (`POST /rooms`) and never persisted. On subsequent `upsertMeeting` calls the secret is not regenerated. The `declare-host` socket event verifies the provided raw secret against the stored hash via `Meeting.verifyHostSecret` before granting host status; unverified claims are rejected with a reason code.
 - **Username enumeration prevention**: `loginService` returns uniform `401 Unauthorized` with `"Invalid username or password."` for both unknown-username and wrong-password cases.
 - **Redis lock CAS release**: the release Lua script compares the stored token to the caller's token before deleting, preventing accidental release of another process's lock.
 - **CORS**: `http://localhost:3000` is always allowed and one production origin can be supplied via `CLIENT_ORIGIN`. Supporting multiple production origins currently requires code changes.
@@ -686,6 +784,8 @@ The following mitigations are implemented in source:
 - **`signal` relay**: `targetId` is verified as a member of the same room via `io.in("meeting:<code>").fetchSockets()` before forwarding; cross-room relay is rejected.
 - **Transcript proxy**: forwards `x-host-secret` and `x-user-token` headers as-is; no validation of these values before forwarding.
 - **TLS on Redis**: all three Redis clients in `redis.js` enable TLS conditionally — `socket.tls: true` is set only when `REDIS_URL` starts with `rediss://`. Plain `redis://` URLs connect without TLS, supporting local development without infrastructure workarounds.
+- **RAG authorization**: `indexTranscriptService`, `getIndexStatusService`, and `ragQueryService` all apply the same `isAuthorized` check as the transcript service; legacy docs (no `ownerId` and no `hostSecretHash`) are open-access; approved `TranscriptRequest` records also grant access.
+- **RAG question sanitisation**: user questions are truncated to 2,000 characters and HTML tags are stripped before being sent to the LLM.
 
 ---
 
@@ -697,7 +797,11 @@ The following are grounded in implementation constraints visible in the source:
 
 2. **Chat history is capped at 500 messages** (`meeting.model.js:addChatMessage`); older messages are discarded in-place on the document. No archival mechanism is implemented.
 
-3. **`User` model has an unused `token` field**: `user.model.js` declares `token: { type: String }` which is never written or read by any service or repository.
+3. **`User` model has no `token` field**: `user.model.js` declares only `name`, `username`, and `password` — there is no `token` field. Any prior reference to an unused `token` field no longer applies.
+
+4. **BullMQ worker shares the same process**: the `indexWorker` is instantiated inline in `rag.service.js` and runs in the same Node.js process as the HTTP server. Under heavy indexing load it may delay HTTP request processing. Under sustained indexing load, event-loop contention may increase WebSocket and HTTP response latency because indexing workers are not isolated into a dedicated process.
+
+5. **`MAX_CHUNKS` effective value depends on `config.json`**: `socket.service.js` reads `cfg.upload?.maxChunks ?? 50000` — if `config.json` does not define `upload.maxChunks`, the fallback is `50,000`. Set `upload.maxChunks` explicitly in `config.json` to control this limit; do not rely on the fallback.
 
 ---
 
@@ -712,19 +816,9 @@ The following are grounded in implementation constraints visible in the source:
 > - ~~`roomEmotionState` is in-process only~~ — state externalised to Redis (`emotion:active:<code>`); consistent across all pm2 processes
 > - ~~No refresh token implementation~~ — `POST /refresh` route added; `loginService` issues and stores opaque refresh tokens; `refreshTokenService` validates and rotates; `logoutService` deletes refresh token from Redis
 > - ~~TLS unconditionally enabled on Redis clients~~ — `redis.js` now enables TLS only when `REDIS_URL` starts with `rediss://`
-> - ~~Missing `JWT_SECRET` does not halt startup~~ — `user.service.js` now calls `process.exit(1)` when `JWT_SECRET` is absent, matching the behaviour already applied to missing MongoDB and Redis connections
+> - ~~Missing `JWT_SECRET` does not halt startup~~ — `user.service.js` now calls `process.exit(1)` when `JWT_SECRET` is absent
 > - ~~Refresh token readable via response body~~ — removed from `loginService` and `refreshTokenService` response bodies; delivered via `HttpOnly` cookie only
 > - ~~Refresh token body fallback in `refreshTokenService` and `logoutService`~~ — both functions now read exclusively from `req.cookies.refreshToken`
 > - ~~Redis metric counters accumulate indefinitely~~ — `incr()` in `transcript.service.js` now applies `METRIC_TTL_SEC` (default 30 days) on first increment; counters reset each period
 > - ~~Participant map serialisation: full map read/write on every event~~ — `meeting:participants:<code>` migrated from a JSON String key to a Redis Hash; join/reconnect/leave/meta updates now use targeted `HSET`/`HDEL` on individual fields; `HGETALL` is used only for full-room participant broadcasts
-> - ~~AI summary prompt uses only Whisper NLP emotion; live emotion data unused~~ — `generateAiSummaryService` now accepts `{ emotionData, emotionNames }` from the request body; `buildGroqPrompt` annotates each Whisper segment with the matched participant's live facial/audio emotion events via `buildSpeakerLiveMap` (exact + prefix name matching); prompt instructs the model to detect NLP-vs-live discrepancies; response schema extended with `discrepancies` array and `live_dominant_emotion` per speaker
-
----
-
-## Future Improvements
-
-These follow directly from the limitations documented above:
-
-- Coordinate the cleanup timer via a Redis-based leader election or distributed cron to prevent duplicate execution across pm2 processes.
-- Remove or repurpose the unused `token` field on the `User` model.
-- Add archival or export for chat history beyond the 500-message cap.
+> - ~~AI summary prompt uses only Whisper NLP emotion; live emotion data unused~~ — `generateAiSummaryService` now accepts `{ emotionData, emotionNames }` from the request body; `buildGroqPrompt` annotates each Whisper segment with the matched participant's live facial/audio emotion events via `buildSpeakerLiveMap`; response schema extended with `discrepancies` array and `live_dominant_emotion` per speaker

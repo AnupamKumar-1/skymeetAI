@@ -111,6 +111,7 @@ Edit `.env` and fill in the required values:
 # Required
 JWT_SECRET=<generate a 64-char random hex string — see below>
 MONGO_URI=mongodb://localhost:27017/hoovik
+REDIS_URL=redis://localhost:6379
 
 # Service URLs
 Ts_SERVICE_URL=http://localhost:5001/process_meeting
@@ -134,6 +135,9 @@ TRANSCRIPT_RATE_LIMIT_WIN_SEC=60
 GROQ_API_KEY=<your-groq-api-key>
 AI_SUMMARY_RATE_LIMIT_MAX=2
 AI_SUMMARY_RATE_LIMIT_WIN_SEC=7200
+
+# RAG pipeline (Nomic embeddings + Groq LLM)
+NOMIC_API_KEY=<your-nomic-api-key>
 
 # Cache TTLs
 HISTORY_CACHE_TTL_SEC=120
@@ -289,10 +293,10 @@ NODE_API=http://localhost:8000/api/v1/transcripts
 **Run:**
 
 ```bash
-uvicorn app:app --host 0.0.0.0 --port 5001
+uvicorn app:app --host 0.0.0.0 --port 5001 --reload
 ```
 
-> Do not use `python app.py` — invoke via `uvicorn app:app` directly.
+> Do not use `python app.py` — invoke via `uvicorn app:app` directly. The `--reload` flag is used in development; omit it in production.
 
 ---
 
@@ -307,15 +311,25 @@ cp .env.example .env
 Edit `.env`:
 
 ```dotenv
-REACT_APP_EMOTION_SOCKET_URL=http://localhost:5002
-REACT_APP_TRANSCRIPT_URL=http://localhost:8000/api/v1/transcripts/proxy
-REACT_APP_TURN_URL_UDP=turn:in.relay.metered.ca:3478?transport=udp
-REACT_APP_TURN_URL_80=turn:in.relay.metered.ca:80
-REACT_APP_TURN_URL_443=turn:in.relay.metered.ca:443
-REACT_APP_TURN_URL_443_TCP=turn:in.relay.metered.ca:443?transport=tcp
-REACT_APP_TURN_URL_TLS=turns:in.relay.metered.ca:443
-REACT_APP_TURN_USERNAME=openrelayproject
-REACT_APP_TURN_CREDENTIAL=openrelayproject
+VITE_SERVER_URL=http://localhost:8000
+VITE_API_URL=http://localhost:8000/api/v1
+VITE_SOCKET_URL=http://localhost:8000
+VITE_SIGNALING_URL=http://localhost:8000
+VITE_AI_URL=http://localhost:8000
+VITE_EMOTION_SOCKET_URL=http://localhost:5002
+VITE_TRANSCRIPT_URL=http://localhost:8000/api/v1/transcripts/proxy
+VITE_TURN_URL_UDP=turn:in.relay.metered.ca:3478?transport=udp
+VITE_TURN_URL_80=turn:in.relay.metered.ca:80
+VITE_TURN_URL_443=turn:in.relay.metered.ca:443
+VITE_TURN_URL_443_TCP=turn:in.relay.metered.ca:443?transport=tcp
+VITE_TURN_URL_TLS=turns:in.relay.metered.ca:443
+VITE_TURN_USERNAME=openrelayproject
+VITE_TURN_CREDENTIAL=openrelayproject
+VITE_SUPPORTS_GLOBAL_MEETINGS=true
+VITE_NOISE_GATE_RMS=0.008
+VITE_NOISE_GATE_HOLD_MS=1500
+VITE_NOISE_GATE_SMOOTHING=0.8
+VITE_SPEECH_MIN_ACTIVE_MS=800
 ```
 
 **Run:**
@@ -479,5 +493,4 @@ Inference latency per participant is tracked via `requestId` round-trip and repo
 - [ ] Relevant subsystem README updated if behaviour changed
 - [ ] `.env.example` updated if a new env variable was added
 - [ ] `docs/` updated if an API contract or event shape changed
-- [ ] CI passes (lint + build)
 - [ ] Screenshot or `curl` output included if the change affects an observable endpoint (e.g. `/stats`, `/health`)
