@@ -1,4 +1,6 @@
-import React from "react";
+import React, { useContext, useEffect, useRef, useState } from "react";
+import { AuthContext } from "../contexts/AuthContext";
+import { useNavigate } from "react-router-dom";
 import "../styles/history.css";
 
 const _isTrivialName = (n) => {
