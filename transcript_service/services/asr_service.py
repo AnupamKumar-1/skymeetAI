@@ -3,6 +3,7 @@ from transformers import pipeline
 from utils.emotion import normalize_emotion, get_emoji
 from collections import Counter
 import re
+from functools import lru_cache
 
 
 print("Loading Whisper model...")
@@ -14,8 +15,6 @@ emotion_pipeline = pipeline(
     model="j-hartmann/emotion-english-distilroberta-base",
     top_k=1,
 )
-
-emotion_cache = {}
 
 MERGE_GAP_SEC = 2.0
 MERGE_MAX_WORDS = 60
@@ -184,23 +183,21 @@ def _merge_raw_segments(raw_segs: list[dict]) -> list[dict]:
     return merged
 
 
+@lru_cache(maxsize=1024)
 def _get_emotion(text: str) -> str:
     """Classify the emotion of a text segment, with in-process caching.
 
-    Segments shorter than 4 words are assigned ``"neutral"`` without
-    model inference. Results are stored in the module-level
-    ``emotion_cache`` dict keyed by the exact text string.
+Segments shorter than 4 words are assigned ``"neutral"`` without
+model inference. Results are cached using ``functools.lru_cache``.
 
-    Args:
-        text: Cleaned segment text to classify.
+Args:
+    text: Cleaned segment text to classify.
 
-    Returns:
-        Normalised emotion label string (e.g. ``"joy"``, ``"anger"``,
-        ``"neutral"``).
-    """
-    if text in emotion_cache:
-        return emotion_cache[text]
-
+Returns:
+    Normalised emotion label string (e.g. ``"joy"``, ``"anger"``,
+    ``"neutral"``).
+"""
+    
     words = text.split()
     if len(words) < 4:
         emo = "neutral"
@@ -212,7 +209,6 @@ def _get_emotion(text: str) -> str:
             print(f"asr_service: emotion detection failed — {e}")
             emo = "neutral"
 
-    emotion_cache[text] = emo
     return emo
 
 
