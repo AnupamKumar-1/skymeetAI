@@ -30,15 +30,18 @@ const _userMatchesParticipant = (user, participant) => {
   return false;
 };
 
-export default function HistoryPanel({ getHistoryOfUser, userData, authLoading }) {
-  const [meetings, setMeetings] = React.useState([]);
-  const [loading, setLoading] = React.useState(true);
-  const [error, setError] = React.useState(null);
-  const [expanded, setExpanded] = React.useState({});
-  const [showAllFor, setShowAllFor] = React.useState({});
-  const [snack, setSnack] = React.useState({ open: false, msg: "", severity: "success" });
+export default function History() {
+  const { getHistoryOfUser, userData, authLoading } = useContext(AuthContext);
+  const [meetings, setMeetings] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [expanded, setExpanded] = useState({});
+  const [showAllFor, setShowAllFor] = useState({});
+  const [snack, setSnack] = useState({ open: false, msg: '', severity: 'success' });
+  const snackTimer = useRef(null);
+  const routeTo = useNavigate();
 
-  React.useEffect(() => {
+  useEffect(() => {
     if (authLoading) return;
     let mounted = true;
     const toArrayShape = (res) => { if (!res) return []; if (Array.isArray(res)) return res; if (Array.isArray(res.meetings)) return res.meetings; if (Array.isArray(res.data)) return res.data; return []; };
@@ -92,13 +95,29 @@ export default function HistoryPanel({ getHistoryOfUser, userData, authLoading }
     return () => { mounted = false; window.removeEventListener("storage", onStorage); window.removeEventListener("meeting_history_updated", onCustom); };
   }, [getHistoryOfUser, userData?._id, authLoading]);
 
-  const showSnack_ = (msg, severity = "success") => { setSnack({ open: true, msg, severity }); setTimeout(() => setSnack(s => ({ ...s, open: false })), 3000); };
+  const buildLink = (m) =>
+    m?.link || (m?.meetingCode
+      ? `${window.location.origin}/room/${encodeURIComponent(String(m.meetingCode).trim().toUpperCase())}`
+      : null);
+
+  const showSnack = (msg, severity = 'success') => {
+    if (snackTimer.current) {
+      clearTimeout(snackTimer.current);
+    }
+
+    setSnack({ open: true, msg, severity });
+
+    snackTimer.current = setTimeout(() => {
+      setSnack(s => ({ ...s, open: false }));
+    }, 3000);
+  };
+
   const copyLink = async (link) => {
     if (!link) return;
     try {
       if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(link);
       else { const ta = document.createElement("textarea"); ta.value = link; Object.assign(ta.style, { position: "fixed", left: "-9999px" }); document.body.appendChild(ta); ta.select(); document.execCommand("copy"); document.body.removeChild(ta); }
-      showSnack_("Link copied to clipboard", "success");
+      showSnack("Link copied to clipboard", "success");
     } catch { showSnack_("Failed to copy link", "error"); }
   };
   const toggleExpand = (id) => setExpanded(prev => ({ ...prev, [id]: !prev[id] }));
