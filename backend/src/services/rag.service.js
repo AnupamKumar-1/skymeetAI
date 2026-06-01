@@ -56,11 +56,13 @@ const RKEYS = {
 };
 const EMBED_CACHE_TTL = 7 * 24 * 3600;
 
+const _redisUrl = new URL(process.env.REDIS_URL || "redis://127.0.0.1:6379");
 const queueOptions = {
     connection: {
-        host: process.env.REDIS_HOST || "127.0.0.1",
-        port: parseInt(process.env.REDIS_PORT || "6379", 10),
-        password: process.env.REDIS_PASSWORD || undefined
+        host: _redisUrl.hostname,
+        port: parseInt(_redisUrl.port || "6379", 10),
+        password: _redisUrl.password || undefined,
+        tls: (process.env.REDIS_URL || "").startsWith("rediss://") ? {} : undefined,
     }
 };
 
