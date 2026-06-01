@@ -18,6 +18,7 @@ import {
 } from "../data-access/transcript.repository.js";
 
 import { connectRedis } from "../infra/redis.js";
+import { TranscriptRequest } from "../models/transcriptRequest.model.js";
 
 const log = makeLogger("rag");
 
@@ -362,7 +363,12 @@ export async function indexTranscriptService(req) {
 
     const isLegacyDoc = !doc.ownerId && !doc.hostSecretHash;
     if (!isLegacyDoc && !isAuthorized(doc, userId, secretHash)) {
-        return { status: 403, body: { success: false, message: "Not authorized" } };
+        const isApproved = userId && await TranscriptRequest.exists({
+            meetingCode: doc.meetingCode,
+            requesterId: userId,
+            status: "approved",
+        });
+        if (!isApproved) return { status: 403, body: { success: false, message: "Not authorized" } };
     }
 
     const transcriptId = String(doc._id);
@@ -471,7 +477,12 @@ export async function getIndexStatusService(req) {
     const { secret, userId, secretHash } = resolveAuth(req);
     const isLegacyDoc = !doc.ownerId && !doc.hostSecretHash;
     if (!isLegacyDoc && !isAuthorized(doc, userId, secretHash)) {
-        return { status: 403, body: { success: false, message: "Not authorized" } };
+        const isApproved = userId && await TranscriptRequest.exists({
+            meetingCode: doc.meetingCode,
+            requesterId: userId,
+            status: "approved",
+        });
+        if (!isApproved) return { status: 403, body: { success: false, message: "Not authorized" } };
     }
 
     const transcriptId = String(doc._id);
@@ -596,7 +607,12 @@ export async function ragQueryService(req, res = null) {
         const isLegacyDoc = !doc.ownerId && !doc.hostSecretHash;
         log.warn("ragQuery: isAuthorized false", { userId, ownerId: doc.ownerId, isLegacyDoc });
         if (!isLegacyDoc) {
-            return reply(403, { success: false, message: "Not authorized" });
+            const isApproved = userId && await TranscriptRequest.exists({
+                meetingCode: doc.meetingCode,
+                requesterId: userId,
+                status: "approved",
+            });
+            if (!isApproved) return reply(403, { success: false, message: "Not authorized" });
         }
     }
 
