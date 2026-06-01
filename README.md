@@ -14,10 +14,7 @@
   <img src="https://img.shields.io/badge/License-MIT-534AB7?style=for-the-badge" />
   &nbsp;
   <img src="https://img.shields.io/badge/PRs-Welcome-1D9E75?style=for-the-badge" />
-&nbsp;
-  <img src="https://img.shields.io/badge/RAG_Q%26A-Semantic_Search-10B981?style=for-the-badge" />
-&nbsp;
-    <img src="https://img.shields.io/badge/RAG_Q%26A-Semantic_Search-10B981?style=for-the-badge" />
+
 </p>
 
 <p align="center">
@@ -26,6 +23,8 @@
   <img src="https://img.shields.io/badge/Emotion_AI-Real--Time_Inference-7C3AED?style=for-the-badge&logo=pytorch&logoColor=white" />
   &nbsp;
   <img src="https://img.shields.io/badge/Transcription-Whisper_+_LLM-0EA5E9?style=for-the-badge&logo=openai&logoColor=white" />
+  &nbsp;
+  <img src="https://img.shields.io/badge/RAG_Q%26A-Semantic_Search-10B981?style=for-the-badge" />
 </p>
 
 <br/>
