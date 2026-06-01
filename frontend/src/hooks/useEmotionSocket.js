@@ -2,8 +2,8 @@ import { useEffect, useRef, useCallback } from "react";
 import { io } from "socket.io-client";
 
 const EMOTION_URL =
-    process.env.REACT_APP_EMOTION_SOCKET_URL ||
-    process.env.REACT_APP_SERVER_URL ||
+    import.meta.env.VITE_EMOTION_SOCKET_URL ||
+    import.meta.env.VITE_SERVER_URL ||
     "http://localhost:8000";
 
 const VALID_EMOTIONS = new Set([

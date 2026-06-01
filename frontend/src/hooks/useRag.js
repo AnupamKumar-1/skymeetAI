@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import SERVER from "../environment";
 
-const SERVER_BASE = process.env.REACT_APP_SERVER_URL || SERVER || "http://localhost:8000";
+const SERVER_BASE = import.meta.env.VITE_SERVER_URL || SERVER || "http://localhost:8000";
 const API = `${SERVER_BASE}/api/v1/rag`;
 
 export function useRag(transcriptIdOrCode) {

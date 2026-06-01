@@ -16,7 +16,7 @@ const apiClient = axios.create({
 });
 
 const SUPPORTS_GLOBAL_MEETINGS =
-  process.env.REACT_APP_SUPPORTS_GLOBAL_MEETINGS === "false" ? false : true;
+  import.meta.env.VITE_SUPPORTS_GLOBAL_MEETINGS === "false" ? false : true;
 
 function readToken() {
   const t = localStorage.getItem("token")?.trim();

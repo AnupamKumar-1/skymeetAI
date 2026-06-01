@@ -9,9 +9,9 @@ import TranscriptViewer from "./TranscriptViewer";
 import HistoryPanel from "./history";
 import { useRag } from "../hooks/useRag";
 
-const SERVER_BASE = process.env.REACT_APP_SERVER_URL || "http://localhost:8000";
-const API_BASE = process.env.REACT_APP_API_URL || `${SERVER_BASE}/api/v1`;
-const SOCKET_SERVER_URL = process.env.REACT_APP_SOCKET_URL || SERVER_BASE;
+const SERVER_BASE = import.meta.env.VITE_SERVER_URL || "http://localhost:8000";
+const API_BASE = import.meta.env.VITE_API_URL || `${SERVER_BASE}/api/v1`;
+const SOCKET_SERVER_URL = import.meta.env.VITE_SOCKET_URL || SERVER_BASE;
 
 const TRANSCRIPT_CACHE_KEY = "tx_cache";
 const TRANSCRIPT_CACHE_TTL = 2 * 60 * 1000;

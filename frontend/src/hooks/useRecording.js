@@ -1,10 +1,10 @@
 import { useRef } from "react";
 
-const NOISE_GATE_RMS_THRESHOLD = parseFloat(process.env.REACT_APP_NOISE_GATE_RMS || "0.008");
-const NOISE_GATE_HOLD_MS = parseInt(process.env.REACT_APP_NOISE_GATE_HOLD_MS || "1500", 10);
-const NOISE_GATE_SMOOTHING = parseFloat(process.env.REACT_APP_NOISE_GATE_SMOOTHING || "0.8");
+const NOISE_GATE_RMS_THRESHOLD = parseFloat(import.meta.env.VITE_NOISE_GATE_RMS || "0.008");
+const NOISE_GATE_HOLD_MS = parseInt(import.meta.env.VITE_NOISE_GATE_HOLD_MS || "1500", 10);
+const NOISE_GATE_SMOOTHING = parseFloat(import.meta.env.VITE_NOISE_GATE_SMOOTHING || "0.8");
 const NOISE_GATE_FFT_SIZE = 2048;
-const SPEECH_MIN_ACTIVE_MS = parseInt(process.env.REACT_APP_SPEECH_MIN_ACTIVE_MS || "800", 10);
+const SPEECH_MIN_ACTIVE_MS = parseInt(import.meta.env.VITE_SPEECH_MIN_ACTIVE_MS || "800", 10);
 
 export default function useRecording({
   isHost,

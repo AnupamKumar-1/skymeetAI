@@ -1,14 +1,14 @@
 import { TRANSCRIPTS_ENABLED, EMOTIONS_ENABLED } from "../environment";
 
 export const SOCKET_SERVER_URL =
-  process.env.REACT_APP_SIGNALING_URL || "http://localhost:8000";
+  import.meta.env.VITE_SIGNALING_URL || "http://localhost:8000";
 
 export const TRANSCRIPT_ENDPOINT = (() => {
   if (!TRANSCRIPTS_ENABLED) return null;
 
   const env =
-    process.env.REACT_APP_TRANSCRIPT_URL ||
-    process.env.REACT_APP_AI_URL;
+    import.meta.env.VITE_TRANSCRIPT_URL ||
+    import.meta.env.VITE_AI_URL;
 
   if (!env) return "http://localhost:5001/process_meeting";
 
@@ -19,7 +19,7 @@ export const TRANSCRIPT_ENDPOINT = (() => {
 })();
 
 export const API_BASE =
-  process.env.REACT_APP_API_URL ||
+  import.meta.env.VITE_API_URL ||
   "http://localhost:8000/api/v1";
 
 export const ICE_CONFIG = {
@@ -29,14 +29,14 @@ export const ICE_CONFIG = {
     },
     {
       urls: [
-        process.env.REACT_APP_TURN_URL_UDP,
-        process.env.REACT_APP_TURN_URL_80,
-        process.env.REACT_APP_TURN_URL_443,
-        process.env.REACT_APP_TURN_URL_443_TCP,
-        process.env.REACT_APP_TURN_URL_TLS,
+        import.meta.env.VITE_TURN_URL_UDP,
+        import.meta.env.VITE_TURN_URL_80,
+        import.meta.env.VITE_TURN_URL_443,
+        import.meta.env.VITE_TURN_URL_443_TCP,
+        import.meta.env.VITE_TURN_URL_TLS,
       ].filter(Boolean),
-      username: process.env.REACT_APP_TURN_USERNAME,
-      credential: process.env.REACT_APP_TURN_CREDENTIAL,
+      username: import.meta.env.VITE_TURN_USERNAME,
+      credential: import.meta.env.VITE_TURN_CREDENTIAL,
     },
   ],
 };

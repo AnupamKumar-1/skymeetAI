@@ -322,7 +322,7 @@ export default function TranscriptViewer({ t, onClose, onSummaryGenerated }) {
             const emotionData = (() => { try { return JSON.parse(localStorage.getItem(`emotions:${code}`) || "{}"); } catch { return {}; } })();
             const emotionNames = (() => { try { return JSON.parse(localStorage.getItem(`emotionNames:${code}`) || "{}"); } catch { return {}; } })();
 
-            const SERVER_BASE = process.env.REACT_APP_SERVER_URL || "http://localhost:8000";
+            const SERVER_BASE = import.meta.env.VITE_SERVER_URL || "http://localhost:8000";
             const res = await fetch(`${SERVER_BASE}/api/v1/transcripts/${idOrCode}/summary`, {
                 method: "POST",
                 headers: {
