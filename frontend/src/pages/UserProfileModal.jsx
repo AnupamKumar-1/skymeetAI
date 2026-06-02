@@ -319,7 +319,7 @@ export default function UserProfileModal({ onClose, userData, onProfileUpdate })
                         </div>
                         {memberSince && <div className="upm-header-sub">Member since {memberSince}</div>}
                         <div className="upm-header-version-row">
-                            <span className="upm-header-version-badge">v1.0.0</span>
+                            <span className="upm-header-version-badge">v1.1.0</span>
                         </div>
                     </div>
                     <button className="upm-close" onClick={onClose} aria-label="Close">
