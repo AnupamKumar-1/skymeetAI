@@ -32,7 +32,7 @@ export async function requestTranscriptService(req) {
         return { status: 404, body: { success: false, message: "Meeting not found." } };
     }
 
-    const hostId = meeting.ownerId || meeting.hostId || null;
+    const hostId = meeting.ownerId || meeting.host || null;
 
     if (hostId && userId.toString() === hostId.toString()) {
         return { status: 400, body: { success: false, message: "Hosts can view their own transcripts directly." } };
@@ -52,7 +52,7 @@ export async function requestTranscriptService(req) {
             return { status: 409, body: { success: false, message: "You already have a pending request for this meeting.", status: existing.status } };
         }
         if (existing.status === "denied") {
-            const updated = await updateRequestStatus(existing._id, "pending");
+            const updated = await updateRequestStatus(existing._id, "pending", hostId || undefined);
             log.info("transcript request re-submitted after denial", { requestId: updated._id, meetingCode, userId });
 
             notifyHostOfTranscriptRequest(meetingCode, {
@@ -112,8 +112,12 @@ export async function resolveRequestService(req) {
 
     if (!request.hostId || request.hostId?.toString() !== userId.toString()) {
         const meeting = await Meeting.findOne({ meetingCode: request.meetingCode }).lean();
-        if (!meeting || (meeting.ownerId || meeting.hostId)?.toString() !== userId.toString()) {
+        const meetingHostId = meeting?.ownerId || meeting?.host;
+        if (!meeting || meetingHostId?.toString() !== userId.toString()) {
             return { status: 403, body: { success: false, message: "Only the host of this meeting can resolve requests." } };
+        }
+        if (!request.hostId) {
+            await updateRequestStatus(request._id, "pending", meetingHostId);
         }
     }
 

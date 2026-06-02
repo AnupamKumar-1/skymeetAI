@@ -1,5 +1,6 @@
 import { Server } from "socket.io";
 import { createAdapter } from "@socket.io/redis-adapter";
+import jwt from "jsonwebtoken";
 import { makeLogger, safeRedisGet, safeRedisSet, safeRedisDel } from "../utils/redis.utils.js";
 
 import { getState, mkdirp, UPLOAD_BASE } from "../services/socket.service.js";
@@ -158,13 +159,26 @@ export function connectToSocket(
 
   io.adapter(createAdapter(pubClient, subClient));
   _io = io;
+
+  io.use((socket, next) => {
+    const token = socket.handshake.auth?.token;
+    if (token && process.env.JWT_SECRET) {
+      try {
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        const verifiedId = decoded._id || decoded.sub || decoded.id;
+        if (verifiedId) socket.data.userId = String(verifiedId);
+      } catch {
+      }
+    }
+    next();
+  });
   mkdirp(UPLOAD_BASE).catch(() => { });
 
   io.on("connection", (socket) => {
     log.info("connected", { socketId: socket.id });
 
     socket.on("home-presence", ({ userId } = {}) => {
-      if (userId) socket.data.userId = String(userId);
+      if (!socket.data.userId && userId) socket.data.userId = String(userId);
     });
 
     socket.on("join-call", async (meetingCodeRaw, meta = {}) => {

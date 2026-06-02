@@ -26,10 +26,12 @@ export async function findRequestByMeetingAndRequester(meetingCode, requesterId)
     return TranscriptRequest.findOne({ meetingCode, requesterId }).lean();
 }
 
-export async function updateRequestStatus(id, status) {
+export async function updateRequestStatus(id, status, hostId) {
+    const update = { status, resolvedAt: status !== "pending" ? new Date() : null };
+    if (hostId) update.hostId = hostId;
     return TranscriptRequest.findByIdAndUpdate(
         id,
-        { status, resolvedAt: status !== "pending" ? new Date() : null },
+        update,
         { new: true }
     ).lean();
 }

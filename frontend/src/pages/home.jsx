@@ -1502,9 +1502,14 @@ export default function Home() {
   }, []);
 
   const handleTranscriptRequestUpdate = React.useCallback((payload) => {
-    setMyRequests((prev) =>
-      prev.map((r) => r._id === payload.requestId ? { ...r, status: payload.status } : r)
-    );
+    setMyRequests((prev) => {
+      const hasIdMatch = prev.some((r) => r._id === payload.requestId);
+      return prev.map((r) => {
+        if (r._id === payload.requestId) return { ...r, status: payload.status };
+        if (!hasIdMatch && r.meetingCode === payload.meetingCode) return { ...r, _id: r._id || payload.requestId, status: payload.status };
+        return r;
+      });
+    });
     if (payload.status === "approved") {
       showSnack(`Transcript access approved for meeting ${payload.meetingCode}!`, "success");
       loadTranscripts(true);
@@ -1514,7 +1519,11 @@ export default function Home() {
   }, [loadTranscripts]);
 
   useEffect(() => {
-    const socket = io(SOCKET_SERVER_URL, { autoConnect: false });
+    let authToken = null;
+    try {
+      authToken = localStorage.getItem("token") || localStorage.getItem("accessToken") || null;
+    } catch { }
+    const socket = io(SOCKET_SERVER_URL, { autoConnect: false, auth: authToken ? { token: authToken } : {} });
 
     const onConnect = () => {
       try {
@@ -1927,7 +1936,7 @@ export default function Home() {
                     <TranscriptItem
                       key={key}
                       t={t}
-                      onOpen={() => (isOwned || myReq?.status === "approved") ? setViewingTranscript(t) : undefined}
+                      onOpen={() => { if (isOwned || myReq?.status === "approved") setViewingTranscript(t); }}
                       requestStatus={myReq?.status}
                       isOwned={isOwned}
                     />

@@ -720,7 +720,7 @@ export async function listTranscriptsService(req) {
 
             const seen = new Set();
             docs = [];
-            for (const d of [...ownedDocs, ...grantedDocs]) {
+            for (const d of [...ownedDocs, ...grantedDocs.map(({ ownerId: _o, ...rest }) => rest)]) {
                 const key = String(d._id || d.meetingCode);
                 if (!seen.has(key)) { seen.add(key); docs.push(d); }
             }
