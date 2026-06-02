@@ -18,7 +18,14 @@ import {
     findMeetingsForUser,
     upsertMeetingByCode,
     ensureMeetingIndexes as repoEnsureMeetingIndexes,
+    findUserProfileById,
+    updateUserProfile,
+    updateUserAvatar,
+    removeUserAvatar,
+    findUserWithPasswordById,
+    updateUserPassword,
 } from "../data-access/user.repository.js";
+import { uploadAvatar, destroyAvatar, AVATAR_MAX_BYTES, ALLOWED_FORMATS } from "../config/cloudinary.js";
 
 const cfg = JSON.parse(
     fs.readFileSync(new URL("../config/config.json", import.meta.url))
@@ -47,12 +54,12 @@ const PASSWORD_MIN_LEN = 8;
 const USERNAME_RE = /^[a-z0-9_.\-]+$/;
 
 if (!process.env.JWT_SECRET) {
-    console.error("[UserController] FATAL: JWT_SECRET is not set");
+    console.error("[UserService] FATAL: JWT_SECRET is not set");
     process.exit(1);
 }
 
 if (process.env.JWT_SECRET && process.env.JWT_SECRET.length < 32) {
-    console.warn("[UserController] WARNING: JWT_SECRET is shorter than 32 characters");
+    console.warn("[UserService] WARNING: JWT_SECRET is shorter than 32 characters");
 }
 
 export const RKEYS = {
@@ -200,7 +207,7 @@ export async function loginService(req) {
                 accessToken,
                 expiresIn: JWT_EXPIRES_IN,
                 message: "Login successful.",
-                user: { _id: user._id, username: user.username, name: user.name },
+                user: { _id: user._id, username: user.username, name: user.name, avatar: user.avatar ?? null },
             },
             cookies: {
                 refreshToken: { value: refreshToken, ttlSec: REFRESH_TOKEN_TTL_SEC },
@@ -270,13 +277,24 @@ export async function registerService(req) {
     const rawName = req.body?.name;
     const rawUsername = req.body?.username;
     const password = req.body?.password;
+    const rawEmail = req.body?.email;
 
     if (!rawName?.trim() || !rawUsername?.trim() || !password?.trim()) {
         return { status: httpStatus.BAD_REQUEST, body: { success: false, message: "Name, username, and password are required." } };
     }
 
+    if (!rawEmail?.trim()) {
+        return { status: httpStatus.BAD_REQUEST, body: { success: false, message: "Email is required." } };
+    }
+
+    const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRe.test(rawEmail.trim())) {
+        return { status: httpStatus.BAD_REQUEST, body: { success: false, message: "A valid email address is required." } };
+    }
+
     const name = rawName.trim();
     const username = rawUsername.trim().toLowerCase();
+    const email = rawEmail.trim().toLowerCase();
 
     if (name.length > MAX_NAME_LEN) {
         return { status: httpStatus.BAD_REQUEST, body: { success: false, message: `Name must be ${MAX_NAME_LEN} characters or fewer.` } };
@@ -302,7 +320,7 @@ export async function registerService(req) {
         }
 
         const hashedPassword = await bcrypt.hash(password, BCRYPT_SALT_ROUNDS);
-        await createUser({ name, username, hashedPassword });
+        await createUser({ name, username, hashedPassword, email });
         log.info("registered", { username });
         return { status: httpStatus.CREATED, body: { success: true, message: "User registered successfully." } };
     } catch (error) {
@@ -555,7 +573,7 @@ export async function getMeService(req) {
             return { status: 200, body: { success: true, user: JSON.parse(cached) } };
         }
 
-        const user = await findUserById(userId);
+        const user = await findUserProfileById(userId);
         if (!user) return { status: 404, body: { success: false, message: "User not found" } };
 
         await safeRedisSet(cacheKey, JSON.stringify(user), { EX: USER_CACHE_TTL_SEC });
@@ -594,5 +612,166 @@ export async function logoutService(req) {
     } catch (err) {
         log.error("logout error", { err: err.message });
         return { status: httpStatus.INTERNAL_SERVER_ERROR, body: { success: false, message: "Failed to logout" } };
+    }
+}
+
+export async function getProfileService(req) {
+    try {
+        const userId = req.user?.id || req.user?._id;
+        if (!userId) return { status: httpStatus.UNAUTHORIZED, body: { success: false, message: "Unauthorized" } };
+
+        const user = await findUserProfileById(userId);
+        if (!user) return { status: httpStatus.NOT_FOUND, body: { success: false, message: "User not found" } };
+
+        return { status: 200, body: { success: true, profile: user } };
+    } catch (err) {
+        log.error("getProfile error", { err: err.message });
+        return { status: 500, body: { success: false, message: "Server error" } };
+    }
+}
+
+export async function updateProfileService(req) {
+    try {
+        const userId = req.user?.id || req.user?._id;
+        if (!userId) return { status: httpStatus.UNAUTHORIZED, body: { success: false, message: "Unauthorized" } };
+
+        const { name, bio, timezone, email } = req.body || {};
+
+        if (name !== undefined) {
+            if (typeof name !== "string" || name.trim().length < 1 || name.trim().length > 64) {
+                return { status: 422, body: { success: false, message: "Name must be 1–64 characters." } };
+            }
+        }
+        if (bio !== undefined && typeof bio === "string" && bio.length > 280) {
+            return { status: 422, body: { success: false, message: "Bio must be under 280 characters." } };
+        }
+        if (email !== undefined && email !== null && email !== "") {
+            const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+            if (typeof email !== "string" || !emailRe.test(email.trim())) {
+                return { status: 422, body: { success: false, message: "Must be a valid email address." } };
+            }
+            if (email.trim().length > 254) {
+                return { status: 422, body: { success: false, message: "Email must be under 254 characters." } };
+            }
+        }
+
+        const updated = await updateUserProfile(userId, {
+            name: name !== undefined ? name : undefined,
+            bio: bio !== undefined ? bio : undefined,
+            timezone: timezone !== undefined ? timezone : undefined,
+            email: email !== undefined ? email : undefined,
+        });
+
+        await safeRedisDel(RKEYS.user(userId.toString()));
+
+        return { status: 200, body: { success: true, profile: updated } };
+    } catch (err) {
+        log.error("updateProfile error", { err: err.message });
+        return { status: 500, body: { success: false, message: "Server error" } };
+    }
+}
+
+export async function updateAvatarService(req) {
+    try {
+        const userId = req.user?.id || req.user?._id;
+        log.info("updateAvatar called", { userId, hasFile: !!req.file, fileSize: req.file?.size, mimetype: req.file?.mimetype });
+        if (!userId) return { status: httpStatus.UNAUTHORIZED, body: { success: false, message: "Unauthorized" } };
+
+        if (!req.file) {
+            return { status: 422, body: { success: false, message: "An image file is required." } };
+        }
+
+        if (req.file.size > AVATAR_MAX_BYTES) {
+            return { status: 413, body: { success: false, message: `Avatar must be under ${AVATAR_MAX_BYTES / (1024 * 1024)} MB.` } };
+        }
+
+        const currentProfile = await findUserProfileById(userId);
+        const oldPublicId = currentProfile?.avatar?.publicId ?? null;
+
+        log.info("uploading to Cloudinary", { userId, oldPublicId });
+        const { url, publicId } = await uploadAvatar(req.file.buffer, userId);
+        log.info("Cloudinary upload success", { url, publicId });
+
+        if (oldPublicId && oldPublicId !== publicId) {
+            await destroyAvatar(oldPublicId).catch((e) =>
+                log.warn("Failed to delete old avatar from Cloudinary", { err: e.message, oldPublicId })
+            );
+        }
+
+        const updated = await updateUserAvatar(userId, { url, publicId });
+
+        await safeRedisDel(RKEYS.user(userId.toString()));
+
+        return { status: 200, body: { success: true, profile: updated } };
+    } catch (err) {
+        log.error("updateAvatar error", { err: err.message, stack: err.stack });
+        return { status: 500, body: { success: false, message: err.message || "Server error" } };
+    }
+}
+
+export async function deleteAvatarService(req) {
+    try {
+        const userId = req.user?.id || req.user?._id;
+        if (!userId) return { status: httpStatus.UNAUTHORIZED, body: { success: false, message: "Unauthorized" } };
+
+        const currentProfile = await findUserProfileById(userId);
+        const publicId = currentProfile?.avatar?.publicId ?? null;
+
+        if (publicId) {
+            await destroyAvatar(publicId).catch((e) =>
+                log.warn("Failed to delete avatar from Cloudinary", { err: e.message, publicId })
+            );
+        }
+
+        const updated = await removeUserAvatar(userId);
+
+        await safeRedisDel(RKEYS.user(userId.toString()));
+
+        return { status: 200, body: { success: true, profile: updated } };
+    } catch (err) {
+        log.error("deleteAvatar error", { err: err.message });
+        return { status: 500, body: { success: false, message: "Server error" } };
+    }
+}
+
+export async function changePasswordService(req) {
+    try {
+        const userId = req.user?.id || req.user?._id;
+        if (!userId) return { status: httpStatus.UNAUTHORIZED, body: { success: false, message: "Unauthorized" } };
+
+        const { currentPassword, newPassword } = req.body || {};
+
+        if (!currentPassword) {
+            return { status: 422, body: { success: false, message: "Current password is required." } };
+        }
+        if (!newPassword || newPassword.length < 8) {
+            return { status: 422, body: { success: false, message: "New password must be at least 8 characters." } };
+        }
+        if (!/[A-Z]/.test(newPassword)) {
+            return { status: 422, body: { success: false, message: "New password must contain at least one uppercase letter." } };
+        }
+        if (!/[0-9]/.test(newPassword)) {
+            return { status: 422, body: { success: false, message: "New password must contain at least one number." } };
+        }
+        if (newPassword.length > 128) {
+            return { status: 422, body: { success: false, message: "New password must be under 128 characters." } };
+        }
+
+        const user = await findUserWithPasswordById(userId);
+        if (!user) return { status: httpStatus.NOT_FOUND, body: { success: false, message: "User not found." } };
+
+        const isCorrect = await bcrypt.compare(currentPassword, user.password);
+        if (!isCorrect) {
+            return { status: httpStatus.UNAUTHORIZED, body: { success: false, message: "Current password is incorrect." } };
+        }
+
+        const hashed = await bcrypt.hash(newPassword, BCRYPT_SALT_ROUNDS);
+        await updateUserPassword(userId, hashed);
+
+        log.info("password changed", { userId });
+        return { status: 200, body: { success: true, message: "Password changed successfully." } };
+    } catch (err) {
+        log.error("changePassword error", { err: err.message });
+        return { status: 500, body: { success: false, message: "Server error" } };
     }
 }

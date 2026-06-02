@@ -22,6 +22,12 @@ const FIELD_RULES = {
     if (!isLogin && !/[0-9]/.test(v)) return "Include at least one number.";
     return "";
   },
+  email: (v) => {
+    if (!v.trim()) return "Email is required.";
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim())) return "Enter a valid email address.";
+    if (v.trim().length > 254) return "Email is too long.";
+    return "";
+  },
 };
 
 function useFieldState(initial = "") {
@@ -42,6 +48,7 @@ export default function Authentication() {
   const name = useFieldState();
   const username = useFieldState();
   const password = useFieldState();
+  const email = useFieldState();
 
   const isLogin = formState === 0;
 
@@ -49,6 +56,7 @@ export default function Authentication() {
     name.setValue(""); name.setError("");
     username.setValue(""); username.setError("");
     password.setValue(""); password.setError("");
+    email.setValue(""); email.setError("");
     setApiError("");
   }, [formState]);
 
@@ -65,6 +73,10 @@ export default function Authentication() {
       const e = FIELD_RULES.name(name.value);
       name.setError(e);
       if (e) valid = false;
+
+      const ee = FIELD_RULES.email(email.value);
+      email.setError(ee);
+      if (ee) valid = false;
     }
 
     const eu = FIELD_RULES.username(username.value);
@@ -93,7 +105,8 @@ export default function Authentication() {
         const result = await handleRegister(
           name.value.trim(),
           username.value.toLowerCase().trim(),
-          password.value
+          password.value,
+          email.value.toLowerCase().trim()
         );
         setSnack({ open: true, message: result || "Account created — please sign in." });
         setFormState(0);
@@ -232,6 +245,30 @@ export default function Authentication() {
                 {name.error && (
                   <span id="au-name-err" className="au-field-error" role="alert">
                     {name.error}
+                  </span>
+                )}
+              </div>
+            )}
+
+            {!isLogin && (
+              <div className="au-field au-field-animate">
+                <label className="au-label" htmlFor="au-email">Email address</label>
+                <input
+                  id="au-email"
+                  className={`au-input${email.error ? " au-input-invalid" : ""}`}
+                  type="email"
+                  placeholder="you@example.com"
+                  value={email.value}
+                  onChange={(e) => handleFieldChange(email, e.target.value)}
+                  autoComplete="email"
+                  maxLength={254}
+                  required
+                  aria-invalid={!!email.error}
+                  aria-describedby={email.error ? "au-email-err" : undefined}
+                />
+                {email.error && (
+                  <span id="au-email-err" className="au-field-error" role="alert">
+                    {email.error}
                   </span>
                 )}
               </div>

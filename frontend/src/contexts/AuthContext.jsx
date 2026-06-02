@@ -160,8 +160,8 @@ export const AuthProvider = ({ children }) => {
     };
   }, [logout]);
 
-  const handleRegister = async (name, username, password) => {
-    const resp = await client.post("/register", { name, username, password });
+  const handleRegister = async (name, username, password, email) => {
+    const resp = await client.post("/register", { name, username, password, email });
     if (resp.status === httpStatus.CREATED) return resp.data.message;
     return null;
   };
@@ -192,6 +192,16 @@ export const AuthProvider = ({ children }) => {
       } else if (token) {
         const decoded = decodeTokenUser(token);
         if (decoded) setUserData(decoded);
+      }
+
+      if (token) {
+        apiClient
+          .get("/users/me", { headers: { Authorization: `Bearer ${token}` } })
+          .then((r) => {
+            const user = r.data?.user ?? r.data ?? null;
+            if (user && (user._id || user.id || user.username)) setUserData(user);
+          })
+          .catch(() => { });
       }
 
       router("/home");

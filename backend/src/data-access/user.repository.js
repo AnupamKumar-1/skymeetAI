@@ -18,7 +18,7 @@ export async function findUserByUsername(username) {
 
 export async function findUserById(userId) {
     return User.findById(userId)
-        .select(ME_POPULATE_FIELDS)
+        .select("_id username name bio timezone avatar email createdAt")
         .lean();
 }
 
@@ -28,13 +28,71 @@ export async function findUserByUsernameLean(username) {
         .lean();
 }
 
-export async function createUser({ name, username, hashedPassword }) {
+export async function createUser({ name, username, hashedPassword, email }) {
     const newUser = new User({
         name: name.trim(),
         username: username.toLowerCase().trim(),
         password: hashedPassword,
+        ...(email ? { email: email.toLowerCase().trim() } : {}),
     });
     return newUser.save();
+}
+
+export async function findUserProfileById(userId) {
+    return User.findById(userId)
+        .select("_id username name bio timezone avatar email createdAt")
+        .lean();
+}
+
+export async function updateUserProfile(userId, { name, bio, timezone, email }) {
+    const fields = {};
+    if (name !== undefined) fields.name = name?.trim();
+    if (bio !== undefined) fields.bio = bio?.trim();
+    if (timezone !== undefined) fields.timezone = timezone?.trim();
+    if (email !== undefined) fields.email = email ? email.toLowerCase().trim() : null;
+    return User.findByIdAndUpdate(
+        userId,
+        { $set: fields },
+        { new: true, runValidators: true }
+    )
+        .select("_id username name bio timezone avatar email createdAt")
+        .lean();
+}
+
+export async function updateUserAvatar(userId, { url, publicId }) {
+    return User.findByIdAndUpdate(
+        userId,
+        { $set: { "avatar.url": url, "avatar.publicId": publicId } },
+        { new: true }
+    )
+        .select("_id username name bio timezone avatar email createdAt")
+        .lean();
+}
+
+export async function removeUserAvatar(userId) {
+    return User.findByIdAndUpdate(
+        userId,
+        { $set: { "avatar.url": null, "avatar.publicId": null } },
+        { new: true }
+    )
+        .select("_id username name bio timezone avatar email createdAt")
+        .lean();
+}
+
+export async function findUserWithPasswordById(userId) {
+    return User.findById(userId)
+        .select("_id password")
+        .lean();
+}
+
+export async function updateUserPassword(userId, hashedPassword) {
+    return User.findByIdAndUpdate(
+        userId,
+        { $set: { password: hashedPassword } },
+        { new: true }
+    )
+        .select("_id")
+        .lean();
 }
 
 export async function findMeetingsByUser(objectUserId, userId) {

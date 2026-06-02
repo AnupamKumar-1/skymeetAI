@@ -76,6 +76,26 @@ html { -webkit-font-smoothing: antialiased; }
   text-shadow: 0 0 28px rgba(96,165,250,0.35);
 }
 
+.hm-sidebar-version {
+  font-size: 0.6rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: rgba(96,165,250,0.55);
+  background: rgba(59,130,246,0.08);
+  border: 1px solid rgba(59,130,246,0.16);
+  border-radius: 4px;
+  padding: 1px 5px;
+  margin-left: auto;
+  font-family: var(--mono);
+  flex-shrink: 0;
+  transition: color 0.12s, background 0.12s;
+}
+.hm-sidebar-brand:hover .hm-sidebar-version {
+  color: rgba(96,165,250,0.8);
+  background: rgba(59,130,246,0.14);
+}
+
+
 .hm-sidebar-nav {
   display: flex; flex-direction: column; gap: 1px;
   padding: 4px 8px;
@@ -1174,7 +1194,7 @@ html { -webkit-font-smoothing: antialiased; }
 
 @media (max-width: 860px) {
   :root { --sidebar: 52px; }
-  .hm-brand-name { display: none; }
+  .hm-brand-name, .hm-sidebar-version { display: none; }
   .hm-sidebar-brand { justify-content: center; padding: 14px 0; }
   .hm-sidebar-nav-item { justify-content: center; padding: 0; width: 34px; font-size: 0; }
   .hm-sidebar-nav-item svg { flex-shrink: 0; }
@@ -1190,6 +1210,15 @@ html { -webkit-font-smoothing: antialiased; }
   .hm-logout-btn:hover { background: rgba(239,68,68,0.1); border-color: transparent; }
   .hm-logout-btn svg { display: block; }
   .hm-grid { grid-template-columns: 1fr; }
+  .hm-profile-btn {
+    width: 36px; height: 36px;
+    padding: 4px; margin: 0 auto 6px;
+    justify-content: center; gap: 0;
+    border-radius: 10px;
+  }
+  .hm-profile-btn-name { display: none; }
+  .hm-profile-btn-img,
+  .hm-profile-btn-avatar { width: 28px; height: 28px; }
 }
 
 @media (max-width: 600px) {
@@ -1201,16 +1230,28 @@ html { -webkit-font-smoothing: antialiased; }
     left: 0; right: 0; width: 100%; height: 54px;
     flex-direction: row; border-right: none;
     border-top: 1px solid var(--border); padding: 0;
-    align-items: center;
+    align-items: center; justify-content: space-evenly;
   }
   .hm-sidebar-brand { display: none; }
-  .hm-sidebar-nav { flex-direction: row; padding: 0 16px; justify-content: space-around; width: 100%; gap: 0; }
-  .hm-sidebar-nav-item { width: auto; justify-content: center; font-size: 0; padding: 0 10px; }
+  .hm-sidebar-nav { display: contents; }
+  .hm-sidebar-nav-item { flex: 1; height: 54px; justify-content: center; font-size: 0; padding: 0; width: auto; border-radius: 0; border: none; }
   .hm-sidebar-stats { display: none; }
   .hm-sidebar-stats-title { display: none; }
   .hm-sidebar-spacer { display: none; }
-  .hm-logout-btn { width: auto; height: auto; padding: 0 10px; margin: 0; font-size: 0; background: transparent; border-color: transparent; border-radius: 0; }
-  .hm-logout-btn:hover { background: transparent; border-color: transparent; }
+  .hm-sidebar-notif-btn { display: none; }
+  .hm-logout-btn { display: none; }
+  .hm-profile-btn {
+    flex: 1; height: 54px;
+    padding: 0 !important; margin: 0 !important;
+    border-radius: 0 !important; border: none !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    justify-content: center; gap: 0;
+  }
+  .hm-profile-btn:hover { background: rgba(59,130,246,0.07) !important; }
+  .hm-profile-btn-name { display: none; }
+  .hm-profile-btn-img,
+  .hm-profile-btn-avatar { width: 26px; height: 26px; border-radius: 7px; box-shadow: none !important; }
   .hm-welcome { padding: 18px 16px 0; }
   .hm-grid { padding: 12px 16px 70px; grid-template-columns: 1fr; }
   .hm-snack { left: 50%; bottom: 64px; }
@@ -1443,14 +1484,146 @@ html { -webkit-font-smoothing: antialiased; }
 
 @media (max-width: 860px) {
   .hm-drawer { width: 340px; }
-  .hm-sidebar-notif-btn {
-    width: 34px; height: 34px; padding: 0;
-    justify-content: center; margin: 2px auto;
-  }
-  .hm-sidebar-notif-label { display: none; }
-  .hm-sidebar-notif-btn svg { margin: 0; }
 }
 @media (max-width: 600px) {
   .hm-drawer { width: 100%; border-left: none; border-top: 1px solid rgba(255,255,255,0.07); top: auto; height: 80vh; border-radius: 20px 20px 0 0; }
   .hm-sidebar-notif-btn { display: none; }
+}
+.hm-profile-btn {
+  margin: 0 8px 6px;
+  width: calc(100% - 16px);
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.07);
+  background: rgba(255,255,255,0.03);
+  color: var(--text);
+  font-family: var(--font);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  transition: background 0.14s, border-color 0.14s;
+  text-align: left;
+  min-width: 0;
+}
+
+.hm-profile-btn:hover {
+  background: rgba(59,130,246,0.07);
+  border-color: rgba(59,130,246,0.2);
+}
+
+.hm-profile-btn-img {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  object-fit: cover;
+  flex-shrink: 0;
+  box-shadow: 0 0 0 1.5px rgba(59,130,246,0.3);
+}
+
+.hm-profile-btn-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #3b82f6 0%, #818cf8 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 0.77rem;
+  color: #fff;
+  flex-shrink: 0;
+  box-shadow: 0 0 0 1.5px rgba(59,130,246,0.25);
+}
+
+.hm-profile-btn-name {
+  font-size: 0.8rem;
+  font-weight: 550;
+  color: var(--text);
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  flex: 1;
+}
+
+@media (min-width: 601px) and (max-width: 640px) {
+  :root { --sidebar: 56px; }
+
+  .hm-sidebar {
+    align-items: center;
+  }
+
+  .hm-sidebar-brand {
+    width: 100%;
+    justify-content: center;
+    padding: 14px 0;
+    margin-bottom: 2px;
+  }
+
+  .hm-sidebar-nav {
+    width: 100%;
+    padding: 4px 8px;
+    gap: 2px;
+    align-items: center;
+  }
+
+  .hm-sidebar-nav-item {
+    justify-content: center;
+    padding: 0;
+    width: 40px;
+    height: 40px;
+    margin: 0;
+  }
+
+  .hm-sidebar-brand span,
+  .hm-sidebar-nav-item span,
+  .hm-sidebar-stats-title,
+  .hm-sidebar-stats,
+  .hm-sidebar-notif-label,
+  .hm-sidebar-version,
+  .hm-logout-btn span {
+    display: none;
+  }
+
+  .hm-sidebar-notif-btn {
+    justify-content: center;
+    padding: 0;
+    width: 40px !important;
+    height: 40px;
+    margin: 2px 0 0;
+  }
+
+  .hm-profile-btn {
+    width: 40px !important;
+    height: 40px;
+    padding: 0;
+    border-radius: 10px;
+    margin: 0 0 4px;
+    justify-content: center;
+    gap: 0;
+    display: flex;
+    align-items: center;
+  }
+
+  .hm-profile-btn-name { display: none; }
+
+  .hm-profile-btn-img,
+  .hm-profile-btn-avatar {
+    width: 28px;
+    height: 28px;
+  }
+
+  .hm-logout-btn {
+    width: 40px !important;
+    height: 40px;
+    padding: 0;
+    justify-content: center;
+    margin: 0 0 8px;
+  }
+
+  .hm-main-area {
+    margin-left: var(--sidebar);
+  }
 }

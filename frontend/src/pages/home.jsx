@@ -8,6 +8,7 @@ import { TRANSCRIPTS_ENABLED } from "../environment";
 import TranscriptViewer from "./TranscriptViewer";
 import HistoryPanel from "./history";
 import { useRag } from "../hooks/useRag";
+import UserProfileModal from "./UserProfileModal";
 
 const SERVER_BASE = import.meta.env.VITE_SERVER_URL || "http://localhost:8000";
 const API_BASE = import.meta.env.VITE_API_URL || `${SERVER_BASE}/api/v1`;
@@ -1269,9 +1270,9 @@ function NotificationDrawer({ open, onClose, requests, onResolve, loading, onRes
 export default function Home() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { logout, getHistoryOfUser, userData, authLoading } = useContext(AuthContext);
+  const { logout, getHistoryOfUser, userData, setUserData, authLoading } = useContext(AuthContext);
 
-  const [name, setName] = useState(localStorage.getItem("displayName") || "");
+  const [meetingName, setMeetingName] = useState(localStorage.getItem("displayName") || "");
   const [room, setRoom] = useState("");
   const [transcripts, setTranscripts] = useState([]);
   const [txLoading, setTxLoading] = useState(false);
@@ -1284,6 +1285,7 @@ export default function Home() {
     localStorage.getItem(PENDING_TRANSCRIPT_KEY) || null
   );
   const [rightPanel, setRightPanel] = useState("activity");
+  const [profileOpen, setProfileOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
   const [pendingRequests, setPendingRequests] = useState([]);
   const [reqsLoading, setReqsLoading] = useState(false);
@@ -1415,6 +1417,11 @@ export default function Home() {
   }, [loadTranscripts, stopPolling]);
 
   useEffect(() => { cleanInvalidHosts(); }, []);
+  useEffect(() => {
+    if (userData?.name && typeof userData.name === "string" && userData.name.trim()) {
+      setMeetingName(userData.name.trim());
+    }
+  }, [userData?.name]);
   useEffect(() => {
     try {
       const token = localStorage.getItem("token");
@@ -1568,9 +1575,9 @@ export default function Home() {
   }
 
   async function createRoom() {
-    if (!name.trim()) { showSnack("Please enter your name first.", "error"); return; }
+    if (!meetingName.trim()) { showSnack("Please enter your name first.", "error"); return; }
     try {
-      const { code, link } = await createRoomAndGetLink(name);
+      const { code, link } = await createRoomAndGetLink(meetingName);
       await copyToClipboard(link);
       setRoom(link);
       showSnack("Meeting created & link copied", "success");
@@ -1581,9 +1588,9 @@ export default function Home() {
   }
 
   async function copyLink() {
-    if (!name.trim()) { showSnack("Enter your name before creating a link", "error"); return; }
+    if (!meetingName.trim()) { showSnack("Enter your name before creating a link", "error"); return; }
     try {
-      const { link } = await createRoomAndGetLink(name);
+      const { link } = await createRoomAndGetLink(meetingName);
       const copied = await copyToClipboard(link);
       setRoom(link);
       showSnack(copied ? "Link copied to clipboard" : `Copy failed — link: ${link}`, copied ? "success" : "error");
@@ -1613,6 +1620,9 @@ export default function Home() {
     try { localStorage.removeItem("displayName"); } catch { }
   }
 
+  const name = typeof userData?.name === "string" && userData.name.trim()
+    ? userData.name.trim()
+    : (localStorage.getItem("displayName") || "");
   const displayInitial = (name || "?")[0].toUpperCase();
   const dedupedTranscripts = dedupeByCode(transcripts);
   const visibleTranscripts = dedupedTranscripts.slice(0, visibleCount);
@@ -1639,6 +1649,7 @@ export default function Home() {
         <div className="hm-sidebar-brand" onClick={() => navigate("/")}>
           <img src="/logo.svg" alt="Hoovik" width="24" height="24" />
           <span className="hm-brand-name">Hoovik</span>
+          <span className="hm-sidebar-version">v1.0.0</span>
         </div>
 
         <nav className="hm-sidebar-nav">
@@ -1717,6 +1728,19 @@ export default function Home() {
 
         <div className="hm-sidebar-spacer" />
 
+        <button className="hm-profile-btn" onClick={() => setProfileOpen(true)} aria-label="Profile">
+          {userData?.avatar?.url ? (
+            <img src={userData.avatar.url} alt="Avatar" className="hm-profile-btn-img" />
+          ) : (
+            <div className="hm-profile-btn-avatar">
+              {(typeof userData?.name === "string" && userData.name.trim() ? userData.name.trim() : "?")[0].toUpperCase()}
+            </div>
+          )}
+          <span className="hm-profile-btn-name">
+            {typeof userData?.name === "string" && userData.name.trim() ? userData.name.trim() : "Profile"}
+          </span>
+        </button>
+
         <button className="hm-logout-btn" onClick={handleLogout} aria-label="Sign out">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden>
             <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4" /><polyline points="16 17 21 12 16 7" /><line x1="21" y1="12" x2="9" y2="12" />
@@ -1727,7 +1751,11 @@ export default function Home() {
 
       <div className="hm-main-area">
         <div className="hm-welcome">
-          <div className="hm-welcome-avatar" aria-hidden>{displayInitial}</div>
+          <div className="hm-welcome-avatar" aria-hidden>
+            {userData?.avatar?.url
+              ? <img src={userData.avatar.url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: "inherit" }} />
+              : displayInitial}
+          </div>
           <div className="hm-welcome-text">
             <h2>Welcome back{name ? `, ${name.split(" ")[0]}` : ""}!</h2>
             <p>Ready to connect? Create or join a room below.</p>
@@ -1746,7 +1774,7 @@ export default function Home() {
               <div className="hm-card-body">
                 <div className="hm-field">
                   <label htmlFor="hm-name">Your display name</label>
-                  <input id="hm-name" type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Anupam Kumar" />
+                  <input id="hm-name" type="text" value={meetingName} onChange={(e) => setMeetingName(e.target.value)} placeholder="e.g. Anupam Kumar" />
                 </div>
                 <div className="hm-btn-row">
                   <button className="hm-btn-p" onClick={createRoom}>
@@ -1970,6 +1998,14 @@ export default function Home() {
         loading={reqsLoading}
         onResolved={(id) => setPendingRequests(prev => prev.filter(r => r._id !== id))}
       />
+
+      {profileOpen && (
+        <UserProfileModal
+          onClose={() => setProfileOpen(false)}
+          userData={userData}
+          onProfileUpdate={(updatedProfile) => setUserData((prev) => ({ ...prev, ...updatedProfile }))}
+        />
+      )}
     </div>
   );
 }

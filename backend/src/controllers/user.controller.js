@@ -10,6 +10,11 @@ import {
   ensureMeetingIndexes,
   logoutService,
   refreshTokenService,
+  getProfileService,
+  updateProfileService,
+  updateAvatarService,
+  deleteAvatarService,
+  changePasswordService,
 } from "../services/user.service.js";
 
 const COOKIE_BASE = {
@@ -85,6 +90,31 @@ const getMe = async (req, res) => {
   return res.status(status).json(body);
 };
 
+const getProfile = async (req, res) => {
+  const { status, body } = await getProfileService(req);
+  return res.status(status).json(body);
+};
+
+const updateProfile = async (req, res) => {
+  const { status, body } = await updateProfileService(req);
+  return res.status(status).json(body);
+};
+
+const updateAvatar = async (req, res) => {
+  const { status, body } = await updateAvatarService(req);
+  return res.status(status).json(body);
+};
+
+const deleteAvatar = async (req, res) => {
+  const { status, body } = await deleteAvatarService(req);
+  return res.status(status).json(body);
+};
+
+const changePassword = async (req, res) => {
+  const { status, body } = await changePasswordService(req);
+  return res.status(status).json(body);
+};
+
 export {
   login,
   register,
@@ -97,4 +127,9 @@ export {
   logout,
   getMe,
   ensureMeetingIndexes,
+  getProfile,
+  updateProfile,
+  updateAvatar,
+  deleteAvatar,
+  changePassword,
 };
