@@ -32,9 +32,9 @@ export async function requestTranscriptService(req) {
         return { status: 404, body: { success: false, message: "Meeting not found." } };
     }
 
-    const hostId = meeting.ownerId || meeting.host || null;
+    const hostId = meeting.ownerId || meeting.hostId || meeting.host || null;
 
-    if (hostId && userId.toString() === hostId.toString()) {
+    if (!hostId || userId.toString() === hostId.toString()) {
         return { status: 400, body: { success: false, message: "Hosts can view their own transcripts directly." } };
     }
 

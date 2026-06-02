@@ -214,6 +214,11 @@ export default function History() {
                   </div>
                   <div className="hist-host-row">
                     <span className="hist-host-name">{m.hostName || "Unknown"}</span>
+                    {(m.raw?.host?.username || m.raw?.hostUsername) && (
+                      <span style={{ fontSize: "0.72rem", color: "var(--text-3)", marginLeft: 5 }}>
+                        @{m.raw?.host?.username || m.raw?.hostUsername}
+                      </span>
+                    )}
                     {cardIsHost && <span className="hist-host-badge">HOST</span>}
                   </div>
                   <div className="hist-participant-count">{parts.length} participant{parts.length !== 1 ? "s" : ""}</div>
@@ -248,6 +253,7 @@ export default function History() {
                     {parts.length === 0 && <p className="hist-no-participants">No participants recorded.</p>}
                     {visibleParts.map((pRaw, idx) => {
                       const name = _participantName(pRaw);
+                      const pUsername = typeof pRaw === "object" ? (pRaw?.username || pRaw?.userName || null) : null;
                       const pIsHost = isParticipantHost(pRaw, m);
                       const pIsYou = _userMatchesParticipant(userData, pRaw);
                       const tileKey = pRaw?._id || pRaw?.id || `${name}-${idx}`;
@@ -260,6 +266,11 @@ export default function History() {
                               {pIsYou && <span className="hist-you-chip">YOU</span>}
                               {pIsHost && <span className="hist-host-chip">HOST</span>}
                             </div>
+                            {pUsername && (
+                              <div style={{ fontSize: "0.7rem", color: "var(--text-3)", lineHeight: 1.3, marginBottom: 2 }}>
+                                @{pUsername}
+                              </div>
+                            )}
                             <div className="hist-role-row">
                               <span className={`hist-role-badge ${pIsHost ? "hist-role-badge--host" : "hist-role-badge--participant"}`}>
                                 {pIsHost ? "Host" : "Participant"}

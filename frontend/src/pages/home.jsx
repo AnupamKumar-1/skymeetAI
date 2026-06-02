@@ -213,7 +213,7 @@ const EMOTION_COLORS = {
   disgust: "#fb923c", neutral: "#64748b",
 };
 
-function TranscriptItem({ t, onOpen, requestStatus, onRequest, isOwned: isOwnedProp }) {
+function TranscriptItem({ t, onOpen, requestStatus, onRequest, isOwned: isOwnedProp, ownerUserData }) {
   const segments = t.metadata?.segments ?? [];
   const speakers = [...new Set(segments.map((s) => s.speaker).filter(Boolean))];
 
@@ -255,6 +255,11 @@ function TranscriptItem({ t, onOpen, requestStatus, onRequest, isOwned: isOwnedP
             {duration !== null && <span className="hm-tx-v2-chip">{fmtDur(duration)}</span>}
             {segments.length > 0 && <span className="hm-tx-v2-chip">{segments.length} turns</span>}
             {dominantSpeaker && <span className="hm-tx-v2-chip">{dominantSpeaker}</span>}
+            {isOwned && ownerUserData?.name && (
+              <span className="hm-tx-v2-chip">
+                {ownerUserData.name}{ownerUserData.username ? ` · @${ownerUserData.username}` : ""}
+              </span>
+            )}
           </div>
         </div>
         {preview && (
@@ -639,14 +644,20 @@ function ActivityPanel({ transcripts, onShowTranscripts }) {
   );
 }
 
-function RequestTranscriptPanel({ participatedMeetings, myRequests, onRequestSent }) {
+function RequestTranscriptPanel({ participatedMeetings, myRequests, onRequestSent, currentUserId }) {
   const [manualCode, setManualCode] = React.useState("");
   const [submitting, setSubmitting] = React.useState({});
   const [submitted, setSubmitted] = React.useState({});
 
-  const participantMeetings = (participatedMeetings || []).filter(
-    (m) => !localStorage.getItem(`host:${(m.meetingCode || "").toUpperCase()}`)
-  );
+  const participantMeetings = (participatedMeetings || []).filter((m) => {
+    const code = (m.meetingCode || "").toUpperCase();
+    if (localStorage.getItem(`host:${code}`)) return false;
+    if (currentUserId) {
+      const hostId = (m.ownerId || m.hostId || m.host || m.owner || "").toString();
+      if (hostId && hostId === currentUserId.toString()) return false;
+    }
+    return true;
+  });
 
   function getStatus(meetingCode) {
     const req = (myRequests || []).find(
@@ -686,7 +697,7 @@ function RequestTranscriptPanel({ participatedMeetings, myRequests, onRequestSen
   function StatusBadge({ code }) {
     const serverStatus = getStatus(code);
     const localStatus = submitted[code];
-    const status = serverStatus || localStatus;
+    const status = localStatus || serverStatus;
     if (!status) return null;
     if (status === "approved") return (
       <span className="hm-txreq-badge hm-txreq-badge-approved">
@@ -1507,15 +1518,11 @@ export default function Home() {
   const handleTranscriptRequestUpdate = React.useCallback((payload) => {
     setMyRequests((prev) => {
       const hasIdMatch = prev.some((r) => r._id === payload.requestId);
-      const hasCodeMatch = prev.some((r) => r.meetingCode === payload.meetingCode);
-      if (hasIdMatch || hasCodeMatch) {
-        return prev.map((r) => {
-          if (r._id === payload.requestId) return { ...r, status: payload.status };
-          if (!hasIdMatch && r.meetingCode === payload.meetingCode) return { ...r, _id: r._id || payload.requestId, status: payload.status };
-          return r;
-        });
-      }
-      return [{ _id: payload.requestId, meetingCode: payload.meetingCode, status: payload.status, createdAt: new Date().toISOString() }, ...prev];
+      return prev.map((r) => {
+        if (r._id === payload.requestId) return { ...r, status: payload.status };
+        if (!hasIdMatch && r.meetingCode === payload.meetingCode) return { ...r, _id: r._id || payload.requestId, status: payload.status };
+        return r;
+      });
     });
     if (payload.status === "approved") {
       showSnack(`Transcript access approved for meeting ${payload.meetingCode}!`, "success");
@@ -1752,9 +1759,16 @@ export default function Home() {
               {(typeof userData?.name === "string" && userData.name.trim() ? userData.name.trim() : "?")[0].toUpperCase()}
             </div>
           )}
-          <span className="hm-profile-btn-name">
-            {typeof userData?.name === "string" && userData.name.trim() ? userData.name.trim() : "Profile"}
-          </span>
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", minWidth: 0, overflow: "hidden" }}>
+            <span className="hm-profile-btn-name">
+              {typeof userData?.name === "string" && userData.name.trim() ? userData.name.trim() : "Profile"}
+            </span>
+            {userData?.username && (
+              <span style={{ fontSize: "0.68rem", color: "var(--text-3)", lineHeight: 1.2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%" }}>
+                @{userData.username}
+              </span>
+            )}
+          </div>
         </button>
 
         <button className="hm-logout-btn" onClick={handleLogout} aria-label="Sign out">
@@ -1791,6 +1805,9 @@ export default function Home() {
                 <div className="hm-field">
                   <label htmlFor="hm-name">Your display name</label>
                   <input id="hm-name" type="text" value={meetingName} onChange={(e) => setMeetingName(e.target.value)} placeholder="e.g. Anupam Kumar" />
+                  {userData?.username && (
+                    <span style={{ fontSize: "0.72rem", color: "var(--text-3)", marginTop: 3, display: "block" }}>@{userData.username}</span>
+                  )}
                 </div>
                 <div className="hm-btn-row">
                   <button className="hm-btn-p" onClick={createRoom}>
@@ -1859,6 +1876,7 @@ export default function Home() {
             <RequestTranscriptPanel
               participatedMeetings={participatedMeetings}
               myRequests={myRequests}
+              currentUserId={currentUserId}
               onRequestSent={(code, status) => {
                 setMyRequests((prev) => {
                   const existing = prev.find((r) => r.meetingCode?.toUpperCase() === code);
@@ -1949,6 +1967,7 @@ export default function Home() {
                       onOpen={() => { if (isOwned || myReq?.status === "approved") setViewingTranscript(t); }}
                       requestStatus={myReq?.status}
                       isOwned={isOwned}
+                      ownerUserData={isOwned ? userData : null}
                     />
                   );
                 })}

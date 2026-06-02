@@ -383,6 +383,18 @@ export default function UserProfileModal({ onClose, userData, onProfileUpdate })
                             </div>
 
                             <div className="upm-field">
+                                <label htmlFor="upm-username">Username</label>
+                                <input
+                                    id="upm-username"
+                                    type="text"
+                                    value={profile?.username ? `@${profile.username}` : ""}
+                                    readOnly
+                                    style={{ opacity: 0.55, cursor: "default", userSelect: "text" }}
+                                />
+                                <span className="upm-field-hint">Username cannot be changed</span>
+                            </div>
+
+                            <div className="upm-field">
                                 <label htmlFor="upm-bio">Bio</label>
                                 <textarea
                                     id="upm-bio"
