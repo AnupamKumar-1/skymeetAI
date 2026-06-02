@@ -652,10 +652,7 @@ function RequestTranscriptPanel({ participatedMeetings, myRequests, onRequestSen
   const participantMeetings = (participatedMeetings || []).filter((m) => {
     const code = (m.meetingCode || "").toUpperCase();
     if (localStorage.getItem(`host:${code}`)) return false;
-    if (currentUserId) {
-      const hostId = (m.ownerId || m.hostId || m.host || m.owner || "").toString();
-      if (hostId && hostId === currentUserId.toString()) return false;
-    }
+    if (m.isHost === true) return false;
     return true;
   });
 

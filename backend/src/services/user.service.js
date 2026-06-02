@@ -368,6 +368,9 @@ export async function getUserHistoryService(req) {
             }
             m.hostName = hostName;
 
+            const ownerIdStr = m.ownerId ? String(m.ownerId) : null;
+            m.isHost = !!(ownerIdStr && ownerIdStr === String(userId));
+
             m.participants = (m.participants || []).map((p) => ({
                 socketId: p?.socketId || null,
                 userId: p?.meta?.userId || p?.userId || null,
