@@ -1649,7 +1649,7 @@ export default function Home() {
         <div className="hm-sidebar-brand" onClick={() => navigate("/")}>
           <img src="/logo.svg" alt="Hoovik" width="24" height="24" />
           <span className="hm-brand-name">Hoovik</span>
-          <span className="hm-sidebar-version">v1.0.0</span>
+          <span className="hm-sidebar-version">v1.1.0</span>
         </div>
 
         <nav className="hm-sidebar-nav">
