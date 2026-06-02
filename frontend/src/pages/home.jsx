@@ -143,10 +143,13 @@ function dedupeByCode(arr) {
 function normalizeTranscript(t) {
   const code = (t.meetingCode || t.meeting_code || "").toString().toUpperCase().trim();
   if (!code) return null;
+  const ownerId = (t.ownerId || t.owner_id || null)?.toString?.() || null;
+  const hostId = (t.hostId || t.host_id || null)?.toString?.() || null;
   return {
     _id: t._id || t.id || null,
     meetingCode: code,
-    hostId: t.hostId || t.host_id || null,
+    ownerId,
+    hostId,
     transcriptText: t.transcriptText || t.transcript || t.metadata?.transcriptText || "",
     fileName: t.fileName || null,
     metadata: t.metadata || {},
@@ -1928,10 +1931,13 @@ export default function Home() {
                 )}
                 {visibleTranscripts.map((t, i) => {
                   const key = getTranscriptKey(t, i);
-                  const isOwned = (currentUserId && t.ownerId && t.ownerId.toString() === currentUserId.toString())
-                    || (currentUserId && t.hostId && t.hostId.toString() === currentUserId.toString())
+                  const uid = currentUserId ? String(currentUserId).trim() : null;
+                  const tOwner = t.ownerId ? String(t.ownerId).trim() : null;
+                  const tHost = t.hostId ? String(t.hostId).trim() : null;
+                  const isOwned = (uid && tOwner && tOwner === uid)
+                    || (uid && tHost && tHost === uid)
                     || !!localStorage.getItem(`host:${t.meetingCode}`);
-                  const myReq = !isOwned ? myRequests.find((r) => r.meetingCode === t.meetingCode) : null;
+                  const myReq = !isOwned ? myRequests.find((r) => (r.meetingCode || "").toUpperCase() === t.meetingCode) : null;
                   return (
                     <TranscriptItem
                       key={key}
