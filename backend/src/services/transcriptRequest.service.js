@@ -38,6 +38,17 @@ export async function requestTranscriptService(req) {
         return { status: 400, body: { success: false, message: "Hosts can view their own transcripts directly." } };
     }
 
+    const wasParticipant = Array.isArray(meeting.participants)
+        ? meeting.participants.some((p) => {
+            const pid = p?.userId || p?.user || p;
+            return pid && pid.toString() === userId.toString();
+        })
+        : false;
+
+    if (!wasParticipant) {
+        return { status: 403, body: { success: false, message: "You can only request transcripts for meetings you participated in." } };
+    }
+
     const transcript = await Transcript.findOne({ meetingCode }).lean();
     if (!transcript) {
         return { status: 404, body: { success: false, message: "No transcript exists for this meeting yet." } };

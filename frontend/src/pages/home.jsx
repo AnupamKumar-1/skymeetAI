@@ -686,7 +686,7 @@ function RequestTranscriptPanel({ participatedMeetings, myRequests, onRequestSen
   function StatusBadge({ code }) {
     const serverStatus = getStatus(code);
     const localStatus = submitted[code];
-    const status = localStatus || serverStatus;
+    const status = serverStatus || localStatus;
     if (!status) return null;
     if (status === "approved") return (
       <span className="hm-txreq-badge hm-txreq-badge-approved">
@@ -1507,11 +1507,15 @@ export default function Home() {
   const handleTranscriptRequestUpdate = React.useCallback((payload) => {
     setMyRequests((prev) => {
       const hasIdMatch = prev.some((r) => r._id === payload.requestId);
-      return prev.map((r) => {
-        if (r._id === payload.requestId) return { ...r, status: payload.status };
-        if (!hasIdMatch && r.meetingCode === payload.meetingCode) return { ...r, _id: r._id || payload.requestId, status: payload.status };
-        return r;
-      });
+      const hasCodeMatch = prev.some((r) => r.meetingCode === payload.meetingCode);
+      if (hasIdMatch || hasCodeMatch) {
+        return prev.map((r) => {
+          if (r._id === payload.requestId) return { ...r, status: payload.status };
+          if (!hasIdMatch && r.meetingCode === payload.meetingCode) return { ...r, _id: r._id || payload.requestId, status: payload.status };
+          return r;
+        });
+      }
+      return [{ _id: payload.requestId, meetingCode: payload.meetingCode, status: payload.status, createdAt: new Date().toISOString() }, ...prev];
     });
     if (payload.status === "approved") {
       showSnack(`Transcript access approved for meeting ${payload.meetingCode}!`, "success");
