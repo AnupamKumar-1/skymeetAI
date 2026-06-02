@@ -552,9 +552,17 @@ export default function VideoMeet() {
   const socketEmotionMap = useMemo(() => {
     if (!isHost && HOST_ONLY_EMOTION) return {};
     const map = {};
+    const claimedKeys = new Set();
     participantsMeta.forEach((p) => {
       const userId = p.meta?.userId;
-      const history = (userId && emotionsMap[userId]) || emotionsMap[p.id] || [];
+      let history = [];
+      if (userId && emotionsMap[userId]) {
+        history = emotionsMap[userId];
+        claimedKeys.add(userId);
+      } else if (!claimedKeys.has(p.id) && emotionsMap[p.id]) {
+        history = emotionsMap[p.id];
+        claimedKeys.add(p.id);
+      }
       if (Array.isArray(history) && history.length) map[p.id] = history;
     });
     return map;

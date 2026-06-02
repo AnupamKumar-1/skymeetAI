@@ -126,10 +126,19 @@ export default function useSocket({
         };
       });
 
+      const freshUserIds = new Set(
+        Object.values(map)
+          .map((p) => p.meta?.userId)
+          .filter(Boolean)
+      );
+
       h.current.setParticipantsMeta((prev) => {
         const merged = { ...map };
         prev.forEach((p) => {
-          if (!merged[p.id]) merged[p.id] = p;
+          if (merged[p.id]) return;
+          const uid = p.meta?.userId;
+          if (uid && freshUserIds.has(uid)) return;
+          merged[p.id] = p;
         });
         return Object.values(merged);
       });
@@ -172,16 +181,31 @@ export default function useSocket({
       if (!peerId || peerId === mySocketId) return;
 
       h.current.setParticipantsMeta((prev) => {
-        if (prev.some((p) => p.id === peerId)) return prev;
+        const incomingUserId = peer?.meta?.userId;
+        const alreadyExists = prev.some(
+          (p) =>
+            p.id === peerId ||
+            (incomingUserId && p.meta?.userId === incomingUserId)
+        );
+        if (alreadyExists) {
+          return prev.map((p) => {
+            if (p.id === peerId) return p;
+            if (incomingUserId && p.meta?.userId === incomingUserId) {
+              return {
+                id: peerId,
+                meta: peer.meta || {},
+                polite: typeof peer.polite === "boolean" ? peer.polite : true,
+              };
+            }
+            return p;
+          });
+        }
         return [
           ...prev,
           {
             id: peerId,
             meta: peer.meta || {},
-            polite:
-              typeof peer.polite === "boolean"
-                ? peer.polite
-                : true,
+            polite: typeof peer.polite === "boolean" ? peer.polite : true,
           },
         ];
       });
@@ -203,17 +227,22 @@ export default function useSocket({
     socket.on("user-joined", onUserJoined);
 
     const onUserLeft = (peerId) => {
-
       h.current.closePeer(peerId);
       h.current.removeAnalyzer(peerId);
 
-      h.current.setEmotionsMap((prev) => {
-        const copy = { ...prev };
-        delete copy[peerId];
-        return copy;
+      h.current.setParticipantsMeta((prev) => {
+        const leaving = prev.find((p) => p.id === peerId);
+        const userId = leaving?.meta?.userId;
+
+        h.current.setEmotionsMap((emap) => {
+          const copy = { ...emap };
+          delete copy[peerId];
+          if (userId) delete copy[userId];
+          return copy;
+        });
+
+        return prev.filter((p) => p.id !== peerId);
       });
-
-
     };
 
     socket.on("user-left", onUserLeft);
