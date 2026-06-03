@@ -157,7 +157,7 @@ export default function Authentication() {
               </div>
               <div className="au-hero-stat">
                 <span className="au-stat-val">Live AI</span>
-                <span className="au-stat-label">Emotion insights (~1s updates)</span>
+                <span className="au-stat-label">Emotion insights</span>
               </div>
               <div className="au-hero-stat">
                 <span className="au-stat-val">Whisper</span>
