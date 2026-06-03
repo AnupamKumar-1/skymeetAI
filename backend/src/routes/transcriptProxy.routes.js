@@ -6,6 +6,12 @@ const router = express.Router();
 const upload = multer();
 
 router.post(["/", "/process_meeting"], upload.any(), async (req, res) => {
+    const tsServiceUrl = process.env.Ts_SERVICE_URL;
+    if (!tsServiceUrl) {
+        console.error("Proxy error: Ts_SERVICE_URL environment variable is not set");
+        return res.status(503).json({ success: false, error: "Transcription service not configured (Ts_SERVICE_URL missing)" });
+    }
+
     try {
         const form = new FormData();
 
@@ -21,7 +27,7 @@ router.post(["/", "/process_meeting"], upload.any(), async (req, res) => {
             form.append("audio_files", blob, file.originalname);
         });
 
-        const response = await fetch(process.env.Ts_SERVICE_URL, {
+        const response = await fetch(tsServiceUrl, {
             method: "POST",
             headers: {
                 "x-host-secret": req.headers["x-host-secret"] || "",

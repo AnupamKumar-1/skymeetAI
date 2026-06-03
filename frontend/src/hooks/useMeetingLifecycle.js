@@ -285,7 +285,7 @@ export default function useMeetingLifecycle({
           }
         });
       } else {
-  
+
         if (API_BASE) {
           const token = localStorage.getItem("token");
           fetch(`${API_BASE}/users/meetings/${code}/participants`, {
@@ -350,7 +350,10 @@ export default function useMeetingLifecycle({
       fileCount++;
     }
 
-    if (fileCount === 0) return;
+    if (fileCount === 0) {
+      localStorage.removeItem("pending_transcript_code");
+      return;
+    }
 
     const token = localStorage.getItem("token");
 
@@ -395,6 +398,7 @@ export default function useMeetingLifecycle({
 
         if (resp.status >= 400 && resp.status < 500) {
           console.error(`[transcript] upload failed with client error ${resp.status} – not retrying`);
+          localStorage.removeItem("pending_transcript_code");
           return;
         }
 
@@ -410,6 +414,7 @@ export default function useMeetingLifecycle({
     }
 
     alert("Failed to upload meeting transcript after multiple attempts. Your audio recording may be lost.");
+    localStorage.removeItem("pending_transcript_code");
   }
 
   async function endMeeting(emotionsMap = {}) {

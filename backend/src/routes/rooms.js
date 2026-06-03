@@ -13,11 +13,9 @@ import {
 
 const router = express.Router();
 
-//  rejects unauthenticated requests with 401
-const jwtAuth = passport.authenticate("jwt", { session: false });
+const requireAuth = passport.authenticate("jwt", { session: false });
 
-// sets req.user if token is valid, continues either way
-const aAuth = (req, _res, next) => {
+const softAuth = (req, _res, next) => {
   passport.authenticate("jwt", { session: false }, (_err, user) => {
     if (user) req.user = user;
     next();
@@ -34,7 +32,7 @@ function generateRoomCode() {
   return crypto.randomBytes(4).toString("hex").toUpperCase();
 }
 
-router.post("/", aAuth, async (req, res) => {
+router.post("/", softAuth, async (req, res) => {
   const start = startTimer();
   try {
     const { hostName } = req.body;
@@ -63,10 +61,21 @@ router.post("/", aAuth, async (req, res) => {
 
     const { hostSecret, hostSecretHash } = generateHostSecretPair();
 
+    const ownerId = req.user && (req.user._id || req.user.id)
+      ? String(req.user._id || req.user.id)
+      : null;
+
     const meetingPayload = {
       meetingCode: roomCode,
       hostName: hostName.trim(),
-      participants: [],
+      hostInfo: { name: hostName.trim(), userId: ownerId },
+      participants: [{
+        socketId: `init-${ownerId || "anon"}-${Date.now()}`,
+        name: hostName.trim(),
+        userId: ownerId,
+        meta: { userId: ownerId },
+        joinedAt: new Date(),
+      }],
       chat: [],
       active: true,
       createdAt: new Date(),
@@ -75,8 +84,8 @@ router.post("/", aAuth, async (req, res) => {
       hostSecretHash,
     };
 
-    if (req.user && (req.user._id || req.user.id)) {
-      meetingPayload.ownerId = req.user._id || req.user.id;
+    if (ownerId) {
+      meetingPayload.ownerId = ownerId;
     }
 
     const meeting = await createMeetingRoom(meetingPayload);
@@ -100,7 +109,7 @@ router.post("/", aAuth, async (req, res) => {
   }
 });
 
-router.get("/mine", jwtAuth, async (req, res) => {
+router.get("/mine", requireAuth, async (req, res) => {
   try {
     if (!req.user || !(req.user._id || req.user.id)) {
       return res.status(401).json({ error: "Authentication required" });

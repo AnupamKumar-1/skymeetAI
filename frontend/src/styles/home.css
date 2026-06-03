@@ -1004,6 +1004,8 @@ html { -webkit-font-smoothing: antialiased; }
 .hm-txreq-banner {
   position: fixed;
   top: 18px; right: 20px;
+  left: calc(var(--sidebar) + 20px);
+  min-width: 0;
   z-index: 9999;
   display: flex; align-items: center; gap: 12px;
   padding: 13px 14px 13px 16px;
@@ -1194,7 +1196,7 @@ html { -webkit-font-smoothing: antialiased; }
 
 @media (max-width: 860px) {
   :root { --sidebar: 52px; }
-  .hm-brand-name, .hm-sidebar-version { display: none; }
+  .hm-brand-name, .hm-sidebar-version, .hm-sidebar-notif-label { display: none; }
   .hm-sidebar-brand { justify-content: center; padding: 14px 0; }
   .hm-sidebar-nav-item { justify-content: center; padding: 0; width: 34px; font-size: 0; }
   .hm-sidebar-nav-item svg { flex-shrink: 0; }
@@ -1239,6 +1241,20 @@ html { -webkit-font-smoothing: antialiased; }
   .hm-sidebar-stats-title { display: none; }
   .hm-sidebar-spacer { display: none; }
   .hm-sidebar-notif-btn { display: none; }
+  .hm-sidebar-nav-notif-mobile { color: rgba(96,165,250,0.9) !important; }
+  .hm-sidebar-notif-count-mobile {
+    position: absolute;
+    top: -5px; right: -6px;
+    min-width: 14px; height: 14px;
+    border-radius: 100px;
+    background: rgba(59,130,246,0.9);
+    border: 1px solid rgba(59,130,246,0.5);
+    color: #fff;
+    font-size: 0.55rem; font-weight: 700;
+    display: inline-flex; align-items: center; justify-content: center;
+    padding: 0 3px;
+    animation: hm-badge-pulse 2.4s ease-in-out infinite;
+  }
   .hm-logout-btn { display: none; }
   .hm-profile-btn {
     flex: 1; height: 54px;
@@ -1250,6 +1266,7 @@ html { -webkit-font-smoothing: antialiased; }
   }
   .hm-profile-btn:hover { background: rgba(59,130,246,0.07) !important; }
   .hm-profile-btn-name { display: none; }
+  .hm-profile-btn-username { display: none; }
   .hm-profile-btn-img,
   .hm-profile-btn-avatar { width: 26px; height: 26px; border-radius: 7px; box-shadow: none !important; }
   .hm-welcome { padding: 18px 16px 0; }
@@ -1484,10 +1501,31 @@ html { -webkit-font-smoothing: antialiased; }
 
 @media (max-width: 860px) {
   .hm-drawer { width: 340px; }
+  .hm-sidebar-notif-btn { position: relative; }
+  .hm-sidebar-notif-count {
+    position: absolute;
+    top: 2px; right: 2px;
+    min-width: 14px; height: 14px;
+    font-size: 0.55rem; padding: 0 3px;
+  }
 }
 @media (max-width: 600px) {
   .hm-drawer { width: 100%; border-left: none; border-top: 1px solid rgba(255,255,255,0.07); top: auto; height: 80vh; border-radius: 20px 20px 0 0; }
   .hm-sidebar-notif-btn { display: none; }
+  .hm-sidebar-nav-notif-mobile { color: rgba(96,165,250,0.9) !important; }
+  .hm-sidebar-notif-count-mobile {
+    position: absolute;
+    top: -5px; right: -6px;
+    min-width: 14px; height: 14px;
+    border-radius: 100px;
+    background: rgba(59,130,246,0.9);
+    border: 1px solid rgba(59,130,246,0.5);
+    color: #fff;
+    font-size: 0.55rem; font-weight: 700;
+    display: inline-flex; align-items: center; justify-content: center;
+    padding: 0 3px;
+    animation: hm-badge-pulse 2.4s ease-in-out infinite;
+  }
 }
 .hm-profile-btn {
   margin: 0 8px 6px;
@@ -1593,6 +1631,13 @@ html { -webkit-font-smoothing: antialiased; }
     width: 40px !important;
     height: 40px;
     margin: 2px 0 0;
+    position: relative;
+  }
+  .hm-sidebar-notif-count {
+    position: absolute;
+    top: 4px; right: 4px;
+    min-width: 14px; height: 14px;
+    font-size: 0.55rem; padding: 0 3px;
   }
 
   .hm-profile-btn {
@@ -1608,6 +1653,7 @@ html { -webkit-font-smoothing: antialiased; }
   }
 
   .hm-profile-btn-name { display: none; }
+  .hm-profile-btn-username { display: none; }
 
   .hm-profile-btn-img,
   .hm-profile-btn-avatar {

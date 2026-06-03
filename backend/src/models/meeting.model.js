@@ -91,14 +91,18 @@ meetingSchema.methods.addParticipant = async function (participant) {
   }
 
   let idx = -1;
-  if (participant.socketId) {
-    idx = this.participants.findIndex((p) => p.socketId === participant.socketId);
-  } else if (participant.userId) {
+  // Always try userId first — catches the init-* placeholder entry created at room-creation
+  // time, so we update it in-place rather than creating a duplicate leftAt:null entry.
+  if (participant.userId) {
     idx = this.participants.findIndex((p) => {
       if (p.userId) return String(p.userId) === String(participant.userId);
       if (p.meta && p.meta.userId) return String(p.meta.userId) === String(participant.userId);
       return false;
     });
+  }
+  // Fall back to socketId match only when there is no userId or no userId match
+  if (idx === -1 && participant.socketId) {
+    idx = this.participants.findIndex((p) => p.socketId === participant.socketId);
   }
 
   if (idx !== -1) {
@@ -192,32 +196,50 @@ meetingSchema.methods.removeParticipant = async function (socketId) {
   return updated;
 };
 
-meetingSchema.methods.markParticipantLeft = async function (socketId) {
+meetingSchema.methods.markParticipantLeft = async function (socketId, userId) {
   const now = new Date();
 
-
-  await this.constructor.updateOne(
+  // Step 1: stamp leftAt by socketId (the live socket connection)
+  const bySocket = await this.constructor.updateOne(
     { _id: this._id, "participants.socketId": socketId },
     { $set: { "participants.$.leftAt": now, lastActivityAt: now } }
   );
 
+  // Step 2: if socketId matched nothing (participant was stored with an init-* or user-* 
+  // placeholder socketId and the real socket ID was never persisted), fall back to userId.
+  // This is the common case — stamp leftAt on ALL entries for this userId that have no leftAt.
+  if (userId && (bySocket.modifiedCount === 0 || bySocket.matchedCount === 0)) {
+    const uid = String(userId);
+    await this.constructor.updateMany(
+      { _id: this._id },
+      { $set: { "participants.$[p].leftAt": now, lastActivityAt: now } },
+      { arrayFilters: [{ "p.leftAt": null, $or: [{ "p.userId": uid }, { "p.meta.userId": uid }] }] }
+    );
+  } else if (userId) {
+    // socketId matched, but also clean up any duplicate placeholder entries for the same
+    // userId (init-* / user-* entries that were never merged) so they don't block active:false.
+    const uid = String(userId);
+    await this.constructor.updateMany(
+      { _id: this._id },
+      { $set: { "participants.$[stale].leftAt": now } },
+      { arrayFilters: [{ "stale.leftAt": null, "stale.socketId": { $regex: /^(init|user)-/ }, $or: [{ "stale.userId": uid }, { "stale.meta.userId": uid }] }] }
+    );
+  }
 
+  // Step 3: re-fetch and check in plain JS
+  const updated = await this.constructor.findById(this._id);
+  if (!updated) return null;
 
+  const anyoneStillPresent = updated.participants.some((p) => !p.leftAt);
+  if (!anyoneStillPresent) {
+    await this.constructor.updateOne(
+      { _id: this._id },
+      { $set: { active: false, lastActivityAt: now } }
+    );
+    updated.active = false;
+  }
 
-  await this.constructor.updateOne(
-    {
-      _id: this._id,
-      $expr: {
-        $eq: [
-          { $size: { $filter: { input: "$participants", cond: { $not: "$$this.leftAt" } } } },
-          0,
-        ],
-      },
-    },
-    { $set: { active: false } }
-  );
-
-  return this.constructor.findById(this._id);
+  return updated;
 };
 
 meetingSchema.methods.addChatMessage = async function (msg) {

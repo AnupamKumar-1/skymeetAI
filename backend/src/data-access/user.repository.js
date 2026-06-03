@@ -150,7 +150,7 @@ export async function findMeetingForParticipant(meetingCode) {
 }
 
 export async function saveMeeting(meeting) {
-    return meeting.save();
+    return meeting.save({ validateModifiedOnly: true });
 }
 
 export async function findMeetingsForUser(objectUserId, userId, mineOnly, limit) {

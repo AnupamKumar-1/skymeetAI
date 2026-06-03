@@ -175,7 +175,7 @@ export async function handleLeave(socket, code, io, userId) {
     const meeting = await findMeetingByCode(code);
     if (!meeting) return;
 
-    await meeting.markParticipantLeft(socket.id);
+    await meeting.markParticipantLeft(socket.id, userId);
 
     let stateArr = await getState(code);
     if (stateArr === REDIS_READ_FAILED) {

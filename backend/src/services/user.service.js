@@ -435,7 +435,10 @@ export async function addParticipantService(req) {
     try {
         const userId = getUserId(req.user);
         if (!userId) return { status: httpStatus.UNAUTHORIZED, body: { success: false, message: "Unauthorized. Missing user id." } };
-        const objectUserId = new mongoose.Types.ObjectId(userId);
+
+        // Guard ObjectId cast — if userId is somehow not a valid ObjectId string, don't crash
+        let objectUserId = null;
+        try { objectUserId = new mongoose.Types.ObjectId(userId); } catch { /* non-ObjectId userId, skip host assignment */ }
 
         const codeParam = (req.params?.code || req.body?.meeting_code || req.body?.meetingCode || "").toString().trim();
         if (!codeParam) return { status: httpStatus.BAD_REQUEST, body: { success: false, message: "Meeting code is required (param or body)." } };
@@ -460,6 +463,11 @@ export async function addParticipantService(req) {
             existingParticipant.joinedAt = new Date();
             existingParticipant.leftAt = null;
             existingParticipant.name = participantName;
+            // Update the socketId to a stable user-based one so markParticipantLeft
+            // can find this entry when the user disconnects via socket
+            if (!existingParticipant.socketId || existingParticipant.socketId.startsWith("init-") || existingParticipant.socketId.startsWith("user-")) {
+                existingParticipant.socketId = `user-${userId}-${Date.now()}`;
+            }
         } else {
             meeting.participants.push({
                 socketId: `user-${userId}-${Date.now()}`,
@@ -467,17 +475,22 @@ export async function addParticipantService(req) {
                 userId,
                 meta: { userId },
                 joinedAt: new Date(),
+                leftAt: null,
             });
         }
 
-        if (!meeting.host) meeting.host = objectUserId;
-        if (!meeting.ownerId) meeting.ownerId = objectUserId;
-        await saveMeeting(meeting);
+        // Only assign host/owner if not already set — never overwrite with a participant's id
+        if (objectUserId) {
+            if (!meeting.host) meeting.host = objectUserId;
+            if (!meeting.ownerId) meeting.ownerId = objectUserId;
+        }
+
+        await meeting.save({ validateModifiedOnly: true });
 
         await batchDel(RKEYS.history(userId), RKEYS.meetingsList(userId, "true"), RKEYS.meetingsList(userId, "false"));
         return { status: httpStatus.OK, body: { success: true, meeting } };
     } catch (error) {
-        log.error("addParticipant error", { err: error.message });
+        log.error("addParticipant error", { err: error.message, stack: error.stack });
         return { status: httpStatus.INTERNAL_SERVER_ERROR, body: { success: false, message: "Something went wrong." } };
     }
 }

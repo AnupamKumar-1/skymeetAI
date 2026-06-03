@@ -98,6 +98,15 @@ async function createRoomAndGetLink(name) {
 
   if (!hostSecret) throw new Error("Server did not return a hostSecret");
 
+  let userId = null;
+  if (token) {
+    try {
+      const payload = JSON.parse(atob(token.split(".")[1]));
+      userId = payload._id || payload.sub || null;
+    } catch { }
+  }
+  if (!userId) userId = localStorage.getItem("userId") || null;
+
   localStorage.setItem("displayName", name.trim());
   localStorage.setItem(
     `host:${code}`,
@@ -106,6 +115,7 @@ async function createRoomAndGetLink(name) {
       hostSecret,
       meetingCode: code,
       createdAt: new Date().toISOString(),
+      userId,
     })
   );
 
@@ -1704,6 +1714,19 @@ export default function Home() {
             </svg>
             Ask Transcripts
           </button>
+          {(pendingRequests.length > 0 || reqsLoading) && (
+            <button className={`hm-sidebar-nav-item hm-sidebar-nav-notif-mobile ${pendingRequests.length > 0 ? "hm-sidebar-notif-has-items" : ""}`} onClick={() => setNotifOpen(true)}>
+              <span style={{ position: "relative", display: "inline-flex" }}>
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                  <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+                  <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+                </svg>
+                {pendingRequests.length > 0 && (
+                  <span className="hm-sidebar-notif-count hm-sidebar-notif-count-mobile">{pendingRequests.length}</span>
+                )}
+              </span>
+            </button>
+          )}
         </nav>
 
         {(pendingRequests.length > 0 || reqsLoading) && (
@@ -1761,7 +1784,7 @@ export default function Home() {
               {typeof userData?.name === "string" && userData.name.trim() ? userData.name.trim() : "Profile"}
             </span>
             {userData?.username && (
-              <span style={{ fontSize: "0.68rem", color: "var(--text-3)", lineHeight: 1.2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%" }}>
+              <span className="hm-profile-btn-username" style={{ fontSize: "0.68rem", color: "var(--text-3)", lineHeight: 1.2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%" }}>
                 @{userData.username}
               </span>
             )}
