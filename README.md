@@ -400,10 +400,10 @@ graph TD
 | Transport | Between | Purpose |
 |---|---|---|
 | WebRTC | Browser ↔ Browser | Live audio/video — never proxied |
-| Socket.IO / WS | Frontend ↔ Backend | SDP/ICE relay, chat, participant state |
+| Socket.IO / WS | Frontend ↔ Backend | SDP/ICE relay, chat, participant state, transcript-request notifications (`transcript-request-received`, `transcript-request-update`), emotion status relay (`emotion-status`) |
 | Socket.IO / WS | Frontend ↔ Emotion Service | `emotion.frame`, `audio_chunk`, `emotion.result` |
 | HTTP multipart | Frontend → Transcript Service | Audio blob upload after meeting ends |
-| HTTP REST | Frontend ↔ Backend | Auth, rooms, transcripts, meeting history |
+| HTTP REST | Frontend ↔ Backend | Auth, rooms, transcripts, transcript-requests, meeting history, RAG Q&A |
 
 ---
 
