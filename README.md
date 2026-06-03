@@ -39,7 +39,7 @@
 
 <br/><br/>
 
-![Hoovik demo](docs/src/Hoovik.gif)
+![Hoovik demo](docs/src/Hoovik.mp4)
 
 </div>
 
