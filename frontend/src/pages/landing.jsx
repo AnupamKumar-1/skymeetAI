@@ -101,6 +101,11 @@ export default function LandingPage() {
               <span className="lp-stat-val">Whisper</span>
               <span className="lp-stat-label">Accurate speaker-aware transcripts</span>
             </div>
+
+            <div className="lp-stat">
+              <span className="lp-stat-val">RAG Q&A</span>
+              <span className="lp-stat-label">Ask questions about your meeting transcript</span>
+            </div>
           </div>
         </section>
 
