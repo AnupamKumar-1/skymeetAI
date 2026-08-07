@@ -12,7 +12,8 @@
     "stop": "pm2 delete all",
     "deploy": "pm2 delete all || true && pm2 start ecosystem.config.cjs --update-env && pm2 save && pm2 list",
     "test:redis": "node tests/redis.test.js",
-    "test:redis:ci": "SKIP_RECOVERY_TESTS=true node tests/redis.test.js"
+    "test:redis:ci": "SKIP_RECOVERY_TESTS=true node tests/redis.test.js",
+    "test": "vitest run"
   },
   "author": "Anupam Kumar",
   "license": "ISC",
@@ -41,6 +42,7 @@
     "socket.io-client": "^4.8.3"
   },
   "devDependencies": {
-    "nodemon": "^3.0.2"
+    "nodemon": "^3.0.2",
+    "vitest": "^3.2.7"
   }
 }
