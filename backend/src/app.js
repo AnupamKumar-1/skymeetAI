@@ -4,6 +4,7 @@ import express from "express";
 import { createServer } from "node:http";
 import mongoose from "mongoose";
 import cors from "cors";
+import helmet from "helmet";
 import cookieParser from "cookie-parser";
 import passport from "passport";
 import "../config/passport.js";
@@ -40,6 +41,8 @@ app.use(cors({
   credentials: true,
 }));
 
+app.use(helmet());
+
 app.use(passport.initialize());
 app.use(cookieParser());
 app.use(express.json());
@@ -53,7 +56,7 @@ app.use("/api/v1/meetings", meetingsRoutes);
 app.use("/api/v1/transcript-requests", transcriptRequestRoutes);
 app.use("/api/v1/rag", ragRoutes);
 
-app.post("/api/v1/auth/logout", logout);
+app.post("/api/v1/auth/logout", passport.authenticate("jwt", { session: false }), logout);
 
 app.use("/api", (req, res) => {
   res.status(404).json({ success: false, message: `Route not found: ${req.method} ${req.originalUrl}` });

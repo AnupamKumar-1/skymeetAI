@@ -485,6 +485,10 @@ export async function createTranscriptService(req) {
     try {
         const existing = await findTranscriptByCode(code);
 
+        if (existing && !isAuthorized(existing, userId, secretHash)) {
+            return { status: 403, body: { success: false, message: "Not authorized" } };
+        }
+
         const finalOwnerId = existing?.ownerId || userId || null;
         const finalSecretHash = existing?.hostSecretHash || secretHash || null;
 

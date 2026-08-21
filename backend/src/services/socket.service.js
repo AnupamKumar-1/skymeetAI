@@ -223,6 +223,11 @@ export async function handleJoinCall(socket, io, meetingCodeRaw, meta = {}) {
         return;
     }
 
+    if (meta && typeof meta === "object" && JSON.stringify(meta).length > 4096) {
+        socket.emit("error", "Meta payload too large");
+        return;
+    }
+
     const name = sanitizeName(meta.name);
     const userId = resolveUserId(meta, socket);
 
@@ -377,6 +382,8 @@ export async function handleUpdateMeta(socket, io, metaUpdate = {}) {
 
     if (!metaUpdate || typeof metaUpdate !== "object") metaUpdate = {};
 
+    if (JSON.stringify(metaUpdate).length > 4096) return;
+
     const normalized = { ...metaUpdate };
 
     if (normalized.name !== undefined) normalized.name = sanitizeName(normalized.name) || socket.data.name;
@@ -412,6 +419,7 @@ export async function handleChatMessage(socket, io, meetingCodeRaw, msg = {}) {
     const start = startTimer();
     const code = String(meetingCodeRaw || "").trim().toUpperCase();
     if (!code || !validateCode(code)) return { ok: false };
+    if (socket.data?.meetingCode !== code) return { ok: false, reason: "not_in_room" };
 
     const userId = socket.data?.userId || socket.id;
     const chatRateKey = KEYS.chatRate(userId);

@@ -421,7 +421,7 @@ cd backend; npm run dev
 Once all services are running:
 
 ```bash
-curl http://localhost:8000/api/v1/rooms/TEST  # → 401 Unauthorized (backend is up)
+curl http://localhost:8000/api/v1/rooms/TEST  # → 404 Room not found (backend is up)
 curl http://localhost:5002/health             # → {"status": "ok"}
 curl http://localhost:5002/ready             # → {"status": "ready"} (only after models load)
 curl http://localhost:5002/stats/json        # → latency snapshot

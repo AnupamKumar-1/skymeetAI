@@ -782,7 +782,9 @@ The following mitigations are implemented in source:
 - **CORS**: `http://localhost:3000` is always allowed and one production origin can be supplied via `CLIENT_ORIGIN`. Supporting multiple production origins currently requires code changes.
 - **`trust proxy: 1`**: enabled; IP extraction in `getClientIp` uses `x-forwarded-for` first. Misconfigured proxy chains could allow IP spoofing.
 - **`signal` relay**: `targetId` is verified as a member of the same room via `io.in("meeting:<code>").fetchSockets()` before forwarding; cross-room relay is rejected.
-- **Transcript proxy**: forwards `x-host-secret` and `x-user-token` headers as-is; no validation of these values before forwarding.
+- **Transcript proxy**: forwards `x-host-secret` and `x-user-token` headers as-is; no validation of these values before forwarding. An optional `x-internal-token` header (from `INTERNAL_SERVICE_TOKEN`) is also forwarded so the transcript service can reject calls that bypass this proxy.
+- **Transcript create/update**: `createTranscriptService` now runs the same `isAuthorized` check as read/update endpoints before overwriting an existing transcript document.
+- **Chat relay**: `handleChatMessage` now rejects messages whose meeting code does not match the socket's joined room.
 - **TLS on Redis**: all three Redis clients in `redis.js` enable TLS conditionally — `socket.tls: true` is set only when `REDIS_URL` starts with `rediss://`. Plain `redis://` URLs connect without TLS, supporting local development without infrastructure workarounds.
 - **RAG authorization**: `indexTranscriptService`, `getIndexStatusService`, and `ragQueryService` all apply the same `isAuthorized` check as the transcript service; legacy docs (no `ownerId` and no `hostSecretHash`) are open-access; approved `TranscriptRequest` records also grant access.
 - **RAG question sanitisation**: user questions are truncated to 2,000 characters and HTML tags are stripped before being sent to the LLM.
