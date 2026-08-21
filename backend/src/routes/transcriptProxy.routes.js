@@ -63,6 +63,7 @@ router.post(["/", "/process_meeting"], upload.any(), handleMulterError, async (r
             headers: {
                 "x-host-secret": hostSecret,
                 "x-user-token": req.headers["x-user-token"] || "",
+                "x-internal-token": process.env.INTERNAL_SERVICE_TOKEN || "",
             },
             body: form,
         });

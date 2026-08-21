@@ -467,7 +467,7 @@ pip install -r requirements.txt
 cp .env.example .env
 uvicorn app:app --host 0.0.0.0 --port 5001
 ```
-> `ffmpeg` must be in `PATH` — validated at startup. Whisper + DistilRoBERTa download from HuggingFace on first run. Do **not** use `python app.py` — invoke via `uvicorn app:app` directly. (`dev.sh` runs this without `--reload`; the emotion service uses `--reload`.)
+> `ffmpeg` must be in `PATH` — validated at startup. Whisper + DistilRoBERTa download from HuggingFace on first run. Do **not** use `python app.py` — invoke via `uvicorn app:app` directly. (`dev.sh` runs both the emotion and transcript services with `--reload`.)
 
 **5 — Frontend**
 ```bash
@@ -517,7 +517,7 @@ The `EmotionTransformer` + XGBoost ensemble was trained on RAVDESS and CREMA-D d
 
 **Download:** [dataset.npz — Google Drive](https://drive.google.com/file/d/135wYH7DB8_10Jc8g08MfC6Poews_Lkgp/view?usp=sharing)
 
-Place under `emotion_service/extracted_dataset/` before running the training pipeline. Pre-trained model files under `models/` are all that's needed to run the inference server. See [`docs/emotion-service.md`](docs/emotion-service.md) for the full training procedure.
+Place under `emotion_service/extracted_dataset/` before running the training pipeline. Pre-trained model files under `models/` are all that's needed to run the inference server. See [`docs/realTimeEmotionService.md`](docs/realTimeEmotionService.md) for the full training procedure.
 
 ---
 

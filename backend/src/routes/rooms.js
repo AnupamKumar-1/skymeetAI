@@ -1,6 +1,7 @@
 import express from "express";
 import crypto from "crypto";
 import passport from "passport";
+import rateLimit from "express-rate-limit";
 import "../../config/passport.js";
 import { startTimer, endTimer } from "../observability/latency/latency.service.js";
 import { LATENCY_LABELS } from "../observability/latency/latency.constants.js";
@@ -12,6 +13,16 @@ import {
 } from "../data-access/rooms.repository.js";
 
 const router = express.Router();
+
+const roomsLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many requests" },
+});
+
+router.use(roomsLimiter);
 
 const requireAuth = passport.authenticate("jwt", { session: false });
 

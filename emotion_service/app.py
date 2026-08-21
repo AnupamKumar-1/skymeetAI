@@ -35,6 +35,7 @@ import base64
 import io
 import json
 import logging
+import os
 import sys
 import threading
 import time
@@ -933,7 +934,7 @@ async def _push_audio(sid: str, raw: bytes, pid: str) -> None:
 
 sio = socketio.AsyncServer(
     async_mode="asgi",
-    cors_allowed_origins="*",
+    cors_allowed_origins=[o.strip() for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()] or "*",
     ping_timeout=30,
     ping_interval=15,
     max_http_buffer_size=8 * 1024 * 1024,
@@ -952,6 +953,12 @@ async def connect(sid: str, environ: dict, auth: Optional[dict]) -> None:
     Starts the GC scheduler on the first connection.
     """
     global _scheduler_started
+
+    shared_secret = os.getenv("EMOTION_SHARED_SECRET")
+    if shared_secret:
+        provided = (auth or {}).get("token")
+        if provided != shared_secret:
+            raise ConnectionRefusedError("unauthorized")
 
     pid = sid
     if auth:

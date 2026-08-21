@@ -176,6 +176,7 @@ async def process_meeting(
     speaker_map: str = Form(default="{}"),
     host_secret: str = Header(default="", alias="x-host-secret"),
     user_token: str = Header(default="", alias="x-user-token"),
+    internal_token: str = Header(default="", alias="x-internal-token"),
 ):
     """Accept a multi-speaker audio upload and dispatch processing asynchronously.
 
@@ -199,6 +200,10 @@ async def process_meeting(
         JSONResponse with HTTP 202 and ``{"success": true, "message":
         "Processing started"}``.
     """
+    expected_internal_token = os.getenv("INTERNAL_SERVICE_TOKEN")
+    if expected_internal_token and internal_token != expected_internal_token:
+        return JSONResponse(status_code=401, content={"success": False, "error": "Unauthorized"})
+
     meeting_code = meeting_code.upper()
 
     try:
