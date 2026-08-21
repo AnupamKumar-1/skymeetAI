@@ -1,14 +1,12 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { isValidToken } from "./authToken";
 
 const withAuth = (WrappedComponent) => {
   const AuthComponent = (props) => {
     const router = useNavigate();
     const [isAllowed, setIsAllowed] = useState(null);
-    const isAuthenticated = () => {
-      const token = localStorage.getItem("token");
-      return token && token !== "undefined" && token !== "null";
-    };
+    const isAuthenticated = () => isValidToken(localStorage.getItem("token"));
 
     useEffect(() => {
       if (!isAuthenticated()) {
