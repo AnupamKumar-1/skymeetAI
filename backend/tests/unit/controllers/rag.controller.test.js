@@ -5,7 +5,7 @@ import {
     ragQuery,
     getRagSession,
     clearRagSession,
-} from "../src/controllers/rag.controller.js";
+} from "../../../src/controllers/rag.controller.js";
 
 import {
     indexTranscriptService,
@@ -13,9 +13,9 @@ import {
     ragQueryService,
     getRagSessionService,
     clearRagSessionService,
-} from "../src/services/rag.service.js";
+} from "../../../src/services/rag.service.js";
 
-vi.mock("../src/services/rag.service.js", () => ({
+vi.mock("../../../src/services/rag.service.js", () => ({
     indexTranscriptService: vi.fn(),
     getIndexStatusService: vi.fn(),
     ragQueryService: vi.fn(),

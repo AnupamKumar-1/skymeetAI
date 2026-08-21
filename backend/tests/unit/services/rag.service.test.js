@@ -10,7 +10,7 @@ vi.mock("bullmq", () => {
     };
 });
 
-vi.mock("../../src/models/ragChunk.model.js", () => ({
+vi.mock("../../../src/models/ragChunk.model.js", () => ({
     default: {
         deleteMany: vi.fn(),
         insertMany: vi.fn(),
@@ -19,7 +19,7 @@ vi.mock("../../src/models/ragChunk.model.js", () => ({
     },
 }));
 
-vi.mock("../../src/models/ragSession.model.js", () => ({
+vi.mock("../../../src/models/ragSession.model.js", () => ({
     default: {
         findOne: vi.fn(),
         findOneAndUpdate: vi.fn(),
@@ -28,7 +28,7 @@ vi.mock("../../src/models/ragSession.model.js", () => ({
     },
 }));
 
-vi.mock("../../src/utils/redis.utils.js", () => ({
+vi.mock("../../../src/utils/redis.utils.js", () => ({
     makeLogger: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() })),
     safeRedisGet: vi.fn(),
     safeRedisSet: vi.fn(),
@@ -37,39 +37,39 @@ vi.mock("../../src/utils/redis.utils.js", () => ({
     safeRedisExpire: vi.fn(),
 }));
 
-vi.mock("../../src/services/transcript.service.js", () => ({
+vi.mock("../../../src/services/transcript.service.js", () => ({
     isAuthorized: vi.fn(),
     resolveAuth: vi.fn(),
 }));
 
-vi.mock("../../src/data-access/transcript.repository.js", () => ({
+vi.mock("../../../src/data-access/transcript.repository.js", () => ({
     findTranscriptById: vi.fn(),
     findTranscriptByCode: vi.fn(),
 }));
 
-vi.mock("../../src/infra/redis.js", () => ({
+vi.mock("../../../src/infra/redis.js", () => ({
     connectRedis: vi.fn(),
 }));
 
-vi.mock("../../src/models/transcriptRequest.model.js", () => ({
+vi.mock("../../../src/models/transcriptRequest.model.js", () => ({
     TranscriptRequest: { exists: vi.fn() },
 }));
 
-import RagChunk from "../../src/models/ragChunk.model.js";
-import RagSession from "../../src/models/ragSession.model.js";
+import RagChunk from "../../../src/models/ragChunk.model.js";
+import RagSession from "../../../src/models/ragSession.model.js";
 import {
     safeRedisGet,
     safeRedisSet,
     safeRedisDel,
     safeRedisIncr,
     safeRedisExpire,
-} from "../../src/utils/redis.utils.js";
-import { isAuthorized, resolveAuth } from "../../src/services/transcript.service.js";
+} from "../../../src/utils/redis.utils.js";
+import { isAuthorized, resolveAuth } from "../../../src/services/transcript.service.js";
 import {
     findTranscriptById,
     findTranscriptByCode,
-} from "../../src/data-access/transcript.repository.js";
-import { TranscriptRequest } from "../../src/models/transcriptRequest.model.js";
+} from "../../../src/data-access/transcript.repository.js";
+import { TranscriptRequest } from "../../../src/models/transcriptRequest.model.js";
 
 function computeChecksum(rawText, segments, aiSummary) {
     return crypto
@@ -83,7 +83,7 @@ async function loadService(env = {}) {
     process.env.GROQ_API_KEY = env.GROQ_API_KEY ?? "test-groq-key";
     process.env.NOMIC_API_KEY = env.NOMIC_API_KEY ?? "test-nomic-key";
     process.env.REDIS_URL = "redis://127.0.0.1:6379";
-    return await import("../../src/services/rag.service.js");
+    return await import("../../../src/services/rag.service.js");
 }
 
 let ragService;

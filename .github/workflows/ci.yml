@@ -38,7 +38,7 @@ jobs:
           REACT_APP_SERVER_URL: http://localhost:8000
 
   backend:
-    name: Backend — syntax check + redis tests
+    name: Backend — tests
     runs-on: ubuntu-latest
 
     defaults:
@@ -72,7 +72,10 @@ jobs:
       - name: Syntax check
         run: node --check src/app.js
 
-      - name: Redis tests
+      - name: Unit tests
+        run: npm run test:unit
+
+      - name: Redis integration tests
         run: npm run test:redis:ci
         env:
           REDIS_URL: redis://localhost:6379

@@ -26,6 +26,7 @@ import {
     updateUserPassword,
 } from "../data-access/user.repository.js";
 import { uploadAvatar, destroyAvatar, AVATAR_MAX_BYTES, ALLOWED_FORMATS } from "../config/cloudinary.js";
+import { blacklistAccessToken } from "../utils/tokenBlacklist.utils.js";
 
 const cfg = JSON.parse(
     fs.readFileSync(new URL("../config/config.json", import.meta.url))
@@ -616,7 +617,7 @@ export async function logoutService(req) {
         const accessToken = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
         if (accessToken) {
             const ttl = parseExpiresInToSeconds(JWT_EXPIRES_IN);
-            await safeRedisSet(`blacklist:${accessToken}`, "1", { EX: ttl });
+            await blacklistAccessToken(accessToken, ttl);
         }
 
         const refreshToken = req.cookies?.refreshToken ?? null;
