@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import crypto from "crypto";
+import { hashHostSecret, hostSecretsMatch } from "../utils/hostSecret.utils.js";
 
 const { Schema, Types, model } = mongoose;
 
@@ -271,7 +272,7 @@ meetingSchema.methods.setHostSecretHash = async function (rawSecret) {
   if (!rawSecret || typeof rawSecret !== "string") {
     throw new Error("rawSecret string required");
   }
-  this.hostSecretHash = crypto.createHash("sha256").update(rawSecret).digest("hex");
+  this.hostSecretHash = hashHostSecret(rawSecret);
   return this.save();
 };
 
@@ -285,8 +286,8 @@ meetingSchema.statics.verifyHostSecret = async function (meetingCode, providedSe
     return null;
   }
 
-  const providedHash = crypto.createHash("sha256").update(providedSecret).digest("hex");
-  if (providedHash === meeting.hostSecretHash) {
+  const providedHash = hashHostSecret(providedSecret);
+  if (hostSecretsMatch(providedHash, meeting.hostSecretHash)) {
     return meeting;
   }
   return null;

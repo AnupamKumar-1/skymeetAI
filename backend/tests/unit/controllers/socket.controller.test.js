@@ -68,7 +68,7 @@ vi.mock("fs", () => ({
     },
 }));
 
-vi.mock("../src/utils/redis.utils.js", () => ({
+vi.mock("../../../src/utils/redis.utils.js", () => ({
     makeLogger: vi.fn(() => ({
         info: vi.fn(),
         warn: vi.fn(),
@@ -79,7 +79,7 @@ vi.mock("../src/utils/redis.utils.js", () => ({
     safeRedisDel: vi.fn(),
 }));
 
-vi.mock("../src/services/socket.service.js", () => ({
+vi.mock("../../../src/services/socket.service.js", () => ({
     getState: vi.fn(),
     mkdirp: vi.fn().mockResolvedValue(undefined),
     UPLOAD_BASE: "/tmp/uploads",
@@ -95,12 +95,12 @@ vi.mock("../src/services/socket.service.js", () => ({
     REDIS_READ_FAILED: "REDIS_READ_FAILED",
 }));
 
-vi.mock("../observability/latency/latency.service.js", () => ({
+vi.mock("../../../src/observability/latency/latency.service.js", () => ({
     startTimer: vi.fn(() => 0),
     endTimer: vi.fn(),
 }));
 
-vi.mock("../src/models/meeting.model.js", () => ({
+vi.mock("../../../src/models/meeting.model.js", () => ({
     Meeting: {
         findOne: vi.fn(),
         verifyHostSecret: vi.fn(),
@@ -108,7 +108,7 @@ vi.mock("../src/models/meeting.model.js", () => ({
 }));
 
 import jwt from "jsonwebtoken";
-import { safeRedisGet, safeRedisSet, safeRedisDel } from "../src/utils/redis.utils.js";
+import { safeRedisGet, safeRedisSet, safeRedisDel } from "../../../src/utils/redis.utils.js";
 import {
     handleJoinCall,
     handleUpdateParticipantState,
@@ -119,15 +119,15 @@ import {
     handleLeave,
     validateCode,
     getParticipants,
-} from "../src/services/socket.service.js";
-import { Meeting } from "../src/models/meeting.model.js";
+} from "../../../src/services/socket.service.js";
+import { Meeting } from "../../../src/models/meeting.model.js";
 import {
     connectToSocket,
     getIo,
     notifyHostOfTranscriptRequest,
     notifyRequesterOfResolution,
     notifyUserOfResolution,
-} from "../src/controllers/socket.controller.js";
+} from "../../../src/controllers/socket.controller.js";
 
 function makeFakeSocket(id = "socket-1") {
     return {
