@@ -6,12 +6,13 @@ import { AuthProvider } from './contexts/AuthContext';
 import VideoMeetComponent from './pages/VideoMeet';
 import HomeComponent from './pages/home';
 import History from './pages/history';
+import { isValidToken } from './utils/authToken';
 
 
 const ProtectedRoute = ({ children }) => {
   const token = localStorage.getItem("token");
 
-  if (!token || token === "undefined" || token === "null") {
+  if (!isValidToken(token)) {
     return <Navigate to="/auth" replace />;
   }
 

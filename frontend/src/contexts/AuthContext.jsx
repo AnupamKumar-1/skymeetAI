@@ -3,6 +3,7 @@ import httpStatus from "http-status";
 import { createContext, useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import server from "../environment";
+import { getStoredToken } from "../utils/authToken";
 
 export const AuthContext = createContext({});
 
@@ -19,8 +20,7 @@ const SUPPORTS_GLOBAL_MEETINGS =
   import.meta.env.VITE_SUPPORTS_GLOBAL_MEETINGS === "false" ? false : true;
 
 function readToken() {
-  const t = localStorage.getItem("token")?.trim();
-  return t && t !== "undefined" && t !== "null" ? t : null;
+  return getStoredToken();
 }
 
 function authHeader() {

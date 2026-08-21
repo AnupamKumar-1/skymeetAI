@@ -23,8 +23,7 @@
   "scripts": {
     "start": "vite",
     "build": "vite build",
-    "test": "react-scripts test",
-    "eject": "react-scripts eject",
+    "test": "vitest run",
     "preview": "vite preview"
   },
   "eslintConfig": {
@@ -47,6 +46,8 @@
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^6.0.2",
-    "vite": "^8.0.15"
+    "jsdom": "^25.0.1",
+    "vite": "^8.0.15",
+    "vitest": "^3.2.7"
   }
 }
